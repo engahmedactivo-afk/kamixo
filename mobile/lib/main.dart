@@ -1,10 +1,21 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'screens/home_shell.dart';
+import 'screens/series_player_screen.dart';
+import 'services/deep_links.dart';
 import 'services/session.dart';
+
+final navigatorKey = GlobalKey<NavigatorState>();
+
+void openSeries(String seriesId, {int? episode}) {
+  navigatorKey.currentState?.push(MaterialPageRoute<void>(
+    builder: (_) => SeriesPlayerScreen(seriesId: seriesId, startEpisode: episode),
+  ));
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -19,6 +30,7 @@ class KamixoApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Kamixo',
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -40,11 +52,29 @@ class StartupGate extends StatefulWidget {
 
 class _StartupGateState extends State<StartupGate> {
   late Future<void> _start;
+  final _links = DeepLinks();
+  StreamSubscription<SeriesLink>? _linkSub;
+  StreamSubscription<dynamic>? _pushSub;
 
   @override
   void initState() {
     super.initState();
-    _start = context.read<Session>().start();
+    _start = _boot();
+  }
+
+  Future<void> _boot() async {
+    final session = context.read<Session>();
+    await session.start();
+    // Links from ads / shares and taps on push notifications open the series directly.
+    _linkSub = _links.stream.listen((l) => openSeries(l.seriesId, episode: l.episode));
+    _pushSub = session.push.onOpen.listen((t) => openSeries(t.seriesId, episode: t.episode));
+  }
+
+  @override
+  void dispose() {
+    _linkSub?.cancel();
+    _pushSub?.cancel();
+    super.dispose();
   }
 
   @override
@@ -62,7 +92,7 @@ class _StartupGateState extends State<StartupGate> {
                 const Text('Could not connect'),
                 const SizedBox(height: 12),
                 FilledButton(
-                  onPressed: () => setState(() => _start = context.read<Session>().start()),
+                  onPressed: () => setState(() => _start = _boot()),
                   child: const Text('Retry'),
                 ),
               ]),

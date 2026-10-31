@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
@@ -72,9 +73,26 @@ class _SeriesPlayerScreenState extends State<SeriesPlayerScreen> {
   Future<void> _askUnlock(EpisodeInfo ep) async {
     final ok = await showPaywall(context, episode: ep, price: _detail!.series.coinsPerEpisode);
     if (ok && mounted) {
-      setState(() => ep.locked = false);
+      setState(() {
+        ep.locked = false;
+        // A new VIP sees every episode open at once.
+        if (_session.vip.active) {
+          for (final e in _detail!.episodes) {
+            e.locked = false;
+          }
+        }
+      });
       _onEpisodeShown(_detail!.episodes.indexOf(ep));
     }
+  }
+
+  void _share() {
+    final d = _detail!;
+    final base = _session.config.shareBaseUrl;
+    final ep = d.episodes[_current].number;
+    final link = base.isEmpty ? '' : '\n$base/${d.series.id}?ep=$ep';
+    SharePlus.instance.share(ShareParams(text: '${d.series.title} — watch it on Kamixo$link', title: d.series.title));
+    _session.analytics.track('share', {'seriesId': d.series.id, 'ep': ep});
   }
 
   void _next() {
@@ -162,6 +180,7 @@ class _SeriesPlayerScreenState extends State<SeriesPlayerScreen> {
                         child: Text('${d.series.title} · EP ${d.episodes[_current].number}/${d.episodes.length}',
                             maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
                       ),
+                      IconButton(icon: const Icon(Icons.share_outlined), onPressed: _share),
                       IconButton(icon: const Icon(Icons.format_list_numbered), onPressed: _showEpisodes),
                     ]),
                   ),
@@ -208,6 +227,7 @@ class _SeriesPlayerScreenState extends State<SeriesPlayerScreen> {
           },
           onCompleted: () {
             _session.analytics.track('ep_complete', {'seriesId': d.series.id, 'ep': ep.number});
+            if (i == d.episodes.length - 1) _session.completeTask('finish_first_series').ignore();
             _next();
           },
         );

@@ -100,6 +100,33 @@ class ApiClient {
 
   Future<int> balance() async => (await _call<Map<String, dynamic>>('GET', '/wallet'))['balance'] as int;
 
+  Future<Me> me() async => Me.fromJson(await _call<Map<String, dynamic>>('GET', '/me'));
+
+  Future<RemoteConfig> config() async => RemoteConfig.fromJson(await _call<Map<String, dynamic>>('GET', '/config'));
+
+  Future<List<VipPlan>> vipPlans() async =>
+      (await _call<List<dynamic>>('GET', '/subscriptions/plans')).map((e) => VipPlan.fromJson(e as Map<String, dynamic>)).toList();
+
+  Future<VipStatus> syncSubscription(String productId) async =>
+      VipStatus.fromJson(await _call<Map<String, dynamic>>('POST', '/subscriptions/sync', data: {'productId': productId}));
+
+  Future<AdUsage> adUsage() async => AdUsage.fromJson(await _call<Map<String, dynamic>>('GET', '/ads/usage'));
+
+  /// Sandbox only: reports an ad completion. With AdMob the server-side callback grants the unlock.
+  Future<void> unlockWithAd(String episodeId) => _call<dynamic>('POST', '/episodes/$episodeId/unlock-with-ad', data: {});
+
+  Future<RewardsSummary> rewards() async => RewardsSummary.fromJson(await _call<Map<String, dynamic>>('GET', '/rewards'));
+
+  /// Returns {coins, streak, balance}.
+  Future<Map<String, dynamic>> checkIn() => _call<Map<String, dynamic>>('POST', '/rewards/check-in', data: {});
+
+  /// Returns {coins, balance}; coins is 0 when the task was already rewarded.
+  Future<Map<String, dynamic>> completeTask(String taskKey) =>
+      _call<Map<String, dynamic>>('POST', '/rewards/tasks', data: {'taskKey': taskKey});
+
+  Future<void> registerPushToken(String token, String platform) =>
+      _call<dynamic>('POST', '/me/push-token', data: {'token': token, 'platform': platform});
+
   Future<List<CoinPack>> coinPacks() async =>
       (await _call<List<dynamic>>('GET', '/coin-packs')).map((e) => CoinPack.fromJson(e as Map<String, dynamic>)).toList();
 

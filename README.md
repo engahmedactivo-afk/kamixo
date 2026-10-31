@@ -2,7 +2,7 @@
 
 A short-drama (micro-drama) streaming app: vertical episodes of 1–3 minutes, a few free episodes per series, and coins to unlock the rest. See [`docs/PLAN.md`](docs/PLAN.md) for the product analysis and roadmap.
 
-**Status: Phase 1 (MVP) is implemented.**
+**Status: Phase 1 (MVP) and Phase 2 (monetization depth) are implemented.**
 
 | Folder | What it is |
 |---|---|
@@ -20,6 +20,15 @@ A short-drama (micro-drama) streaming app: vertical episodes of 1–3 minutes, a
 - **Analytics:** funnel events (`feed_view`, `ep_start`, `ep_complete`, `paywall_view`, `purchase`, `unlock`) are batched to the backend.
 - **Admin CMS:** create series and set free episodes and price, add episodes (HLS URL plus subtitles), publish or unpublish, manage coin packs, and see 24h stats.
 - **Playback security:** the server decides access, and media URLs can be signed with an expiry for your CDN.
+
+## Features in Phase 2
+
+- **VIP subscriptions:** weekly/monthly plans; VIP users watch everything without coins. Purchases go through RevenueCat, and the backend also listens to RevenueCat **webhooks**, so coins and VIP are applied even if the app never reported the purchase. "Restore purchases" is supported.
+- **Watch an ad to unlock:** rewarded ads with a daily cap (`AD_UNLOCK_DAILY_CAP`). With AdMob the backend verifies Google's signed **server-side verification** callback before granting anything; in development a sandbox "ad" is shown instead.
+- **Daily check-in and tasks:** streak-based coin bonuses (10, 10, 15, 15, 20, 25, 40) and one-time tasks (turn on notifications, share the app, finish a series).
+- **Push notifications:** FCM HTTP v1 (service account, no SDK). Admin broadcast, automatic "new episode" alerts to everyone who started that series, and "you stopped at episode N" come-back reminders.
+- **Deep links:** `kamixo://series/<id>?ep=N` opens the app on that episode; the backend serves a share/ad landing page at `/s/<id>?ep=N` that redirects into the app. Ads should link to that page.
+- **Remote config and A/B tests:** first-purchase bonus, which paywall tab shows first, and named experiments whose variant is assigned per user and attached to every analytics event.
 
 ## Run the backend
 
@@ -72,6 +81,20 @@ Without RevenueCat keys, the app uses a **sandbox store**: buying coins is free 
 
 The app configures RevenueCat with `appUserID` set to the backend user id. The backend then confirms each transaction with RevenueCat before crediting coins.
 
+### Phase 2 integrations
+
+| Integration | Backend `.env` | App `--dart-define` |
+|---|---|---|
+| RevenueCat webhook | `REVENUECAT_WEBHOOK_SECRET` (same value as the Authorization header configured in the RevenueCat dashboard; URL `<PUBLIC_BASE_URL>/webhooks/revenuecat`) | – |
+| AdMob rewarded ads | `AD_REWARD_VERIFIER=admob`; set the SSV callback URL in AdMob to `<PUBLIC_BASE_URL>/webhooks/admob/ssv` | `ADMOB_REWARDED_ANDROID`, `ADMOB_REWARDED_IOS` (ad unit ids). Replace the test **app ids** in `AndroidManifest.xml` and `Info.plist`. |
+| Push (FCM) | `FCM_SERVICE_ACCOUNT_JSON` (Firebase service-account JSON on one line) | `FIREBASE_API_KEY`, `FIREBASE_APP_ID`, `FIREBASE_SENDER_ID`, `FIREBASE_PROJECT_ID` (from the Firebase console). On iOS also upload your APNs key to Firebase. |
+| Deep links | `PUBLIC_BASE_URL`, `APP_URL_SCHEME` | Custom scheme is already registered. For `https://` App Links / Universal Links, set your host in `AndroidManifest.xml` and add Associated Domains in Xcode, then publish `assetlinks.json` / `apple-app-site-association` on that host. |
+| Come-back reminders | daily cron: `curl -X POST -H "x-admin-key: $ADMIN_API_KEY" <PUBLIC_BASE_URL>/admin/push/reminders` | – |
+
+Without any of these set, everything still works in **sandbox** mode (fake ads, free VIP, no push), and the backend refuses sandbox verifiers in production (`NODE_ENV=production`).
+
+**Attribution / MMP:** add the AppsFlyer or Adjust SDK to the app and have your ad campaigns point at `/s/<seriesId>?ep=N` (or an MMP OneLink that forwards to it). The `session_start` event carries the experiment variants, so ROAS can be split by variant.
+
 ## Video hosting
 
 Episodes are HLS (`.m3u8`) URLs. Upload and transcode them with Mux, Cloudflare Stream, or AWS MediaConvert + CloudFront, then paste the URL in the admin CMS.
@@ -97,8 +120,16 @@ All user endpoints need `Authorization: Bearer <token>` from `POST /auth/guest`.
 | PUT | `/progress` | `{seriesId, episodeNumber, positionSec}` |
 | GET | `/me/continue-watching` | |
 | POST | `/events` | `{events: [{name, props, ts}]}` |
-| * | `/admin/...` | Header `x-admin-key` |
+| GET | `/me` | Balance, VIP status, ad allowance |
+| GET | `/config` | Remote config + experiment variants |
+| GET/POST | `/subscriptions/plans`, `/subscriptions/me`, `/subscriptions/sync` | VIP |
+| GET/POST | `/ads/usage`, `/episodes/:id/unlock-with-ad` | Rewarded ads (sandbox) |
+| GET/POST | `/rewards`, `/rewards/check-in`, `/rewards/tasks` | Daily check-in, tasks |
+| POST | `/me/push-token` | `{token, platform}` |
+| GET | `/s/:id?ep=N` | Public share / deep-link page |
+| POST | `/webhooks/revenuecat`, GET `/webhooks/admob/ssv` | Store / ad callbacks |
+| * | `/admin/...` | Header `x-admin-key` (series, episodes, coin packs, VIP plans, push, settings) |
 
-## Next: Phase 2
+## Next: Phase 3
 
-VIP subscriptions, rewarded-ad unlocks, daily check-in, push notifications, deep links from ads, and MMP attribution. See `docs/PLAN.md`.
+AI dubbing pipeline, recommendations, a web player with Stripe payments, and a studio/creator portal. See `docs/PLAN.md`.

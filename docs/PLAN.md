@@ -84,7 +84,7 @@ short-drama app worldwide, competing with ReelShort, DramaBox, NetShort and Free
 5. Subtitles (manual or AI) in 2–3 languages.
 6. Analytics events: `feed_view, ep_start, ep_complete, paywall_view, purchase, unlock`.
 
-### Phase 2: Monetization depth (week 11–16)
+### Phase 2: Monetization depth (week 11–16) ✅ implemented, see README
 - VIP weekly/monthly subscriptions, rewarded-ad unlocks, daily check-in and tasks.
 - Paywall A/B tests (price per ep, free-ep count, pack sizes, first-purchase discount).
 - Push notifications ("new episodes", "you stopped at ep 12").

@@ -35,6 +35,12 @@ abstract class CoinStore {
 
   /// Returns null if the user cancelled.
   Future<StorePurchase?> buy(String productId);
+
+  /// Buys an auto-renewing VIP plan. Returns false if the user cancelled.
+  Future<bool> subscribe(String productId);
+
+  /// Restores previous purchases; returns the product ids of active subscriptions.
+  Future<List<String>> restore();
 }
 
 /// Real purchases through RevenueCat. The backend verifies each transaction with RevenueCat.
@@ -56,6 +62,30 @@ class RevenueCatCoinStore implements CoinStore {
       _products[p.identifier] = p;
     }
     return {for (final p in products) p.identifier: p.priceString};
+  }
+
+  Future<StoreProduct?> _subscriptionProduct(String productId) async {
+    final products = await Purchases.getProducts([productId], productCategory: ProductCategory.subscription);
+    return products.isEmpty ? null : products.first;
+  }
+
+  @override
+  Future<bool> subscribe(String productId) async {
+    final product = await _subscriptionProduct(productId);
+    if (product == null) throw StateError('Plan $productId is not available in the store');
+    try {
+      await Purchases.purchase(PurchaseParams.storeProduct(product));
+      return true;
+    } on PlatformException catch (e) {
+      if (PurchasesErrorHelper.getErrorCode(e) == PurchasesErrorCode.purchaseCancelledError) return false;
+      rethrow;
+    }
+  }
+
+  @override
+  Future<List<String>> restore() async {
+    final info = await Purchases.restorePurchases();
+    return info.activeSubscriptions;
   }
 
   @override
@@ -87,6 +117,12 @@ class SandboxCoinStore implements CoinStore {
   @override
   Future<StorePurchase?> buy(String productId) async =>
       StorePurchase(_platform, productId, 'sandbox-${const Uuid().v4()}');
+
+  @override
+  Future<bool> subscribe(String productId) async => true;
+
+  @override
+  Future<List<String>> restore() async => [];
 }
 
 /// Persists store purchases until the backend has credited them, so coins are never lost
