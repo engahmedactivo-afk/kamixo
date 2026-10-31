@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SeriesStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum WalletEntryType {
+  PURCHASE
+  BONUS
+  UNLOCK
+  REFUND
+  ADJUST
+}
+
+enum UnlockMethod {
+  COINS
+  AD
+  VIP
+}
+
+model User {
+  id        String   @id @default(uuid())
+  deviceId  String   @unique
+  locale    String   @default("en")
+  country   String?
+  createdAt DateTime @default(now())
+
+  walletEntries WalletEntry[]
+  purchases     Purchase[]
+  unlocks       Unlock[]
+  progress      WatchProgress[]
+}
+
+model Series {
+  id              String       @id @default(uuid())
+  title           String
+  description     String       @default("")
+  coverUrl        String
+  genres          String[]
+  freeEpisodes    Int          @default(5)
+  coinsPerEpisode Int          @default(60)
+  status          SeriesStatus @default(DRAFT)
+  viewCount       Int          @default(0)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  publishedAt     DateTime?
+
+  episodes Episode[]
+  progress WatchProgress[]
+
+  @@index([status, publishedAt])
+}
+
+model Episode {
+  id          String @id @default(uuid())
+  seriesId    String
+  number      Int
+  title       String @default("")
+  durationSec Int    @default(0)
+  hlsUrl      String
+  /// Map of language code -> WebVTT URL, e.g. {"en": "https://.../ep1.en.vtt"}
+  subtitles   Json   @default("{}")
+
+  series  Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+  unlocks Unlock[]
+
+  @@unique([seriesId, number])
+}
+
+model CoinPack {
+  id         String  @id @default(uuid())
+  /// Store product id (App Store / Google Play), e.g. "coins_500"
+  productId  String  @unique
+  coins      Int
+  bonusCoins Int     @default(0)
+  /// Display-only; the store's localized price is shown in the app when available
+  priceLabel String
+  active     Boolean @default(true)
+  sortOrder  Int     @default(0)
+}
+
+/// Append-only ledger. Balance = SUM(delta). Never update or delete rows.
+model WalletEntry {
+  id        String          @id @default(uuid())
+  userId    String
+  delta     Int
+  type      WalletEntryType
+  refId     String?
+  note      String?
+  createdAt DateTime        @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model Purchase {
+  id            String   @id @default(uuid())
+  userId        String
+  platform      String
+  productId     String
+  /// Store transaction id; unique so a receipt can only be credited once
+  transactionId String   @unique
+  coins         Int
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Unlock {
+  userId     String
+  episodeId  String
+  method     UnlockMethod
+  coinsSpent Int          @default(0)
+  createdAt  DateTime     @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  episode Episode @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@id([userId, episodeId])
+}
+
+model WatchProgress {
+  userId        String
+  seriesId      String
+  episodeNumber Int
+  positionSec   Int      @default(0)
+  updatedAt     DateTime @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  series Series @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@id([userId, seriesId])
+  @@index([userId, updatedAt])
+}
+
+model AnalyticsEvent {
+  id        BigInt   @id @default(autoincrement())
+  userId    String?
+  name      String
+  props     Json     @default("{}")
+  clientTs  DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+}

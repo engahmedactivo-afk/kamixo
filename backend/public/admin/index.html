@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kamixo Admin</title>
+<style>
+  :root { --bg:#0f0f14; --panel:#1a1a22; --line:#2c2c38; --text:#ececf1; --muted:#9a9aab; --accent:#ff3d71; --ok:#3ddc97; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; }
+  header h1 { font-size:16px; margin:0; } header h1 span { color:var(--accent); }
+  nav button { background:none; border:0; color:var(--muted); padding:6px 10px; cursor:pointer; font:inherit; border-radius:6px; }
+  nav button.active { color:var(--text); background:var(--line); }
+  main { max-width:1100px; margin:0 auto; padding:20px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  th { color:var(--muted); font-weight:500; }
+  input, select, textarea { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 9px; font:inherit; }
+  label { display:block; color:var(--muted); font-size:12px; margin:8px 0 4px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:10px; }
+  button.btn { background:var(--accent); color:#fff; border:0; padding:8px 14px; border-radius:6px; cursor:pointer; font:inherit; }
+  button.ghost { background:var(--line); color:var(--text); border:0; padding:6px 10px; border-radius:6px; cursor:pointer; font:inherit; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:99px; font-size:12px; background:var(--line); }
+  .pill.PUBLISHED { background:rgba(61,220,151,.15); color:var(--ok); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .stat b { display:block; font-size:24px; } .stat span { color:var(--muted); }
+  img.cover { width:40px; height:60px; object-fit:cover; border-radius:4px; background:var(--line); }
+  #toast { position:fixed; bottom:20px; right:20px; padding:10px 14px; border-radius:8px; background:var(--panel); border:1px solid var(--line); display:none; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Kamixo <span>Admin</span></h1>
+  <nav id="nav">
+    <button data-view="dashboard" class="active">Dashboard</button>
+    <button data-view="series">Series</button>
+    <button data-view="packs">Coin packs</button>
+  </nav>
+  <div style="margin-left:auto" class="row">
+    <input id="key" type="password" placeholder="Admin API key" style="width:200px">
+    <button class="ghost" id="saveKey">Save key</button>
+  </div>
+</header>
+<main id="app"></main>
+<div id="toast"></div>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+let adminKey = '';
+try { adminKey = sessionStorage.getItem('kamixoAdminKey') || ''; } catch {}
+$('#key').value = adminKey;
+$('#saveKey').onclick = () => { adminKey = $('#key').value.trim(); try { sessionStorage.setItem('kamixoAdminKey', adminKey); } catch {} render(); };
+
+function toast(msg, bad) {
+  const t = $('#toast'); t.textContent = msg; t.style.borderColor = bad ? 'var(--accent)' : 'var(--ok)'; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3000);
+}
+
+async function api(method, path, body) {
+  const res = await fetch('/admin' + path, {
+    method, headers: { 'content-type': 'application/json', 'x-admin-key': adminKey },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(Array.isArray(data.message) ? data.message.join(', ') : data.message || res.statusText);
+  return data;
+}
+
+let view = 'dashboard';
+let currentSeriesId = null;
+$('#nav').onclick = (e) => {
+  const v = e.target.dataset.view; if (!v) return;
+  view = v; currentSeriesId = null;
+  document.querySelectorAll('#nav button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
+  render();
+};
+
+async function render() {
+  const app = $('#app');
+  if (!adminKey) { app.innerHTML = '<div class="card">Enter the admin API key (ADMIN_API_KEY) above.</div>'; return; }
+  try {
+    if (view === 'dashboard') await renderDashboard(app);
+    if (view === 'series') currentSeriesId ? await renderSeriesDetail(app, currentSeriesId) : await renderSeriesList(app);
+    if (view === 'packs') await renderPacks(app);
+  } catch (e) { app.innerHTML = `<div class="card">Error: ${esc(e.message)}</div>`; }
+}
+
+async function renderDashboard(app) {
+  const s = await api('GET', '/stats');
+  app.innerHTML = `<div class="card stats">
+    ${[['Users', s.users], ['Published series', s.publishedSeries], ['Purchases (24h)', s.purchases24h], ['Coins sold (24h)', s.coinsSold24h], ['Unlocks (24h)', s.unlocks24h]]
+      .map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}
+  </div>`;
+}
+
+function seriesForm(s = {}) {
+  return `<div class="grid">
+    <div><label>Title</label><input name="title" value="${esc(s.title)}" required></div>
+    <div><label>Cover URL (9:16)</label><input name="coverUrl" value="${esc(s.coverUrl)}" required></div>
+    <div><label>Genres (comma separated)</label><input name="genres" value="${esc((s.genres || []).join(', '))}"></div>
+    <div><label>Free episodes</label><input name="freeEpisodes" type="number" min="0" value="${esc(s.freeEpisodes ?? 5)}"></div>
+    <div><label>Coins per episode</label><input name="coinsPerEpisode" type="number" min="1" value="${esc(s.coinsPerEpisode ?? 60)}"></div>
+  </div>
+  <label>Description</label><textarea name="description" rows="3">${esc(s.description)}</textarea>`;
+}
+function readSeriesForm(form) {
+  const f = new FormData(form);
+  return {
+    title: f.get('title'), coverUrl: f.get('coverUrl'), description: f.get('description'),
+    genres: String(f.get('genres')).split(',').map((g) => g.trim()).filter(Boolean),
+    freeEpisodes: Number(f.get('freeEpisodes')), coinsPerEpisode: Number(f.get('coinsPerEpisode')),
+  };
+}
+
+async function renderSeriesList(app) {
+  const list = await api('GET', '/series');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">New series</h3>
+    <form id="newSeries">${seriesForm()}<p><button class="btn">Create series</button></p></form></div>
+  <div class="card"><table>
+    <thead><tr><th></th><th>Title</th><th>Genres</th><th>Episodes</th><th>Free / Price</th><th>Views</th><th>Status</th><th></th></tr></thead>
+    <tbody>${list.map((s) => `<tr>
+      <td><img class="cover" src="${esc(s.coverUrl)}" alt=""></td>
+      <td>${esc(s.title)}</td><td>${esc(s.genres.join(', '))}</td><td>${s._count.episodes}</td>
+      <td>${s.freeEpisodes} free / ${s.coinsPerEpisode} coins</td><td>${s.viewCount}</td>
+      <td><span class="pill ${esc(s.status)}">${esc(s.status)}</span></td>
+      <td><button class="ghost" data-open="${esc(s.id)}">Open</button></td></tr>`).join('') || '<tr><td colspan="8">No series yet.</td></tr>'}
+    </tbody></table></div>`;
+  $('#newSeries').onsubmit = async (e) => {
+    e.preventDefault();
+    try { const s = await api('POST', '/series', readSeriesForm(e.target)); toast('Series created'); currentSeriesId = s.id; render(); }
+    catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => { currentSeriesId = b.dataset.open; render(); }));
+}
+
+async function renderSeriesDetail(app, id) {
+  const s = await api('GET', '/series/' + id);
+  const nextNo = (s.episodes.at(-1)?.number ?? 0) + 1;
+  app.innerHTML = `
+  <p><button class="ghost" id="back">← All series</button></p>
+  <div class="card">
+    <div class="row" style="justify-content:space-between"><h3 style="margin:0">${esc(s.title)} <span class="pill ${esc(s.status)}">${esc(s.status)}</span></h3>
+      <div class="row">
+        <button class="btn" id="toggle">${s.status === 'PUBLISHED' ? 'Unpublish' : 'Publish'}</button>
+        <button class="ghost" id="del">Delete</button>
+      </div></div>
+    <form id="editSeries">${seriesForm(s)}<p><button class="ghost">Save changes</button></p></form>
+  </div>
+  <div class="card"><h3 style="margin-top:0">Add episode</h3>
+    <form id="newEp"><div class="grid">
+      <div><label>Number</label><input name="number" type="number" min="1" value="${nextNo}"></div>
+      <div><label>Duration (sec)</label><input name="durationSec" type="number" min="0" value="90"></div>
+      <div style="grid-column:span 2"><label>HLS URL (.m3u8 from Mux / Cloudflare Stream / your CDN)</label><input name="hlsUrl" required></div>
+      <div style="grid-column:span 2"><label>Subtitles JSON, e.g. {"en":"https://…/en.vtt"}</label><input name="subtitles" value="{}"></div>
+    </div><p><button class="btn">Add episode</button></p></form>
+  </div>
+  <div class="card"><table><thead><tr><th>#</th><th>Duration</th><th>HLS</th><th>Subtitles</th><th>Access</th><th></th></tr></thead>
+    <tbody>${s.episodes.map((e) => `<tr><td>${e.number}</td><td>${e.durationSec}s</td>
+      <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.hlsUrl)}</td>
+      <td>${esc(Object.keys(e.subtitles || {}).join(', ') || '—')}</td>
+      <td>${e.number <= s.freeEpisodes ? 'Free' : s.coinsPerEpisode + ' coins'}</td>
+      <td><button class="ghost" data-delep="${esc(e.id)}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6">No episodes yet.</td></tr>'}
+    </tbody></table></div>`;
+  $('#back').onclick = () => { currentSeriesId = null; render(); };
+  $('#toggle').onclick = async () => {
+    try { await api('PATCH', '/series/' + id, { status: s.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED' }); toast('Status updated'); render(); }
+    catch (err) { toast(err.message, true); }
+  };
+  $('#del').onclick = async () => {
+    if (!confirm(`Delete "${s.title}" and all its episodes? This cannot be undone.`)) return;
+    try { await api('DELETE', '/series/' + id); toast('Deleted'); currentSeriesId = null; render(); } catch (err) { toast(err.message, true); }
+  };
+  $('#editSeries').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api('PATCH', '/series/' + id, readSeriesForm(e.target)); toast('Saved'); render(); } catch (err) { toast(err.message, true); }
+  };
+  $('#newEp').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    let subtitles;
+    try { subtitles = JSON.parse(f.get('subtitles') || '{}'); } catch { return toast('Subtitles must be valid JSON', true); }
+    try {
+      await api('POST', `/series/${id}/episodes`, { number: Number(f.get('number')), durationSec: Number(f.get('durationSec')), hlsUrl: f.get('hlsUrl'), subtitles });
+      toast('Episode added'); render();
+    } catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-delep]').forEach((b) => (b.onclick = async () => {
+    if (!confirm('Delete this episode?')) return;
+    try { await api('DELETE', '/episodes/' + b.dataset.delep); toast('Episode deleted'); render(); } catch (err) { toast(err.message, true); }
+  }));
+}
+
+async function renderPacks(app) {
+  const packs = await api('GET', '/coin-packs');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">New coin pack</h3>
+    <p style="color:var(--muted);margin-top:0">The product id must match the consumable product created in App Store Connect / Google Play Console (and RevenueCat).</p>
+    <form id="newPack"><div class="grid">
+      <div><label>Store product id</label><input name="productId" placeholder="coins_500" required></div>
+      <div><label>Coins</label><input name="coins" type="number" min="1" required></div>
+      <div><label>Bonus coins</label><input name="bonusCoins" type="number" min="0" value="0"></div>
+      <div><label>Price label</label><input name="priceLabel" placeholder="$4.99" required></div>
+      <div><label>Sort order</label><input name="sortOrder" type="number" value="0"></div>
+    </div><p><button class="btn">Create pack</button></p></form></div>
+  <div class="card"><table><thead><tr><th>Product id</th><th>Coins</th><th>Bonus</th><th>Price</th><th>Active</th><th></th></tr></thead>
+    <tbody>${packs.map((p) => `<tr><td>${esc(p.productId)}</td><td>${p.coins}</td><td>${p.bonusCoins}</td><td>${esc(p.priceLabel)}</td>
+      <td>${p.active ? 'Yes' : 'No'}</td><td><button class="ghost" data-toggle="${esc(p.id)}" data-active="${p.active}">${p.active ? 'Disable' : 'Enable'}</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+  $('#newPack').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api('POST', '/coin-packs', { productId: f.get('productId'), coins: Number(f.get('coins')), bonusCoins: Number(f.get('bonusCoins')), priceLabel: f.get('priceLabel'), sortOrder: Number(f.get('sortOrder')) });
+      toast('Pack created'); render();
+    } catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-toggle]').forEach((b) => (b.onclick = async () => {
+    try { await api('PATCH', '/coin-packs/' + b.dataset.toggle, { active: b.dataset.active !== 'true' }); render(); } catch (err) { toast(err.message, true); }
+  }));
+}
+
+render();
+</script>
+</body>
+</html>
