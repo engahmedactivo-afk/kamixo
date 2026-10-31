@@ -12,6 +12,8 @@ export interface PlaybackInfo {
   url: string;
   subtitles: Record<string, string>;
   expiresAt: string | null;
+  /** Languages that have an AI-dubbed audio version */
+  dubs: string[];
 }
 
 /**
@@ -51,6 +53,7 @@ export class PlaybackService {
       include: { series: { select: { id: true, freeEpisodes: true, coinsPerEpisode: true, status: true } } },
     });
     if (!ep || ep.series.status !== 'PUBLISHED') throw new NotFoundException('Episode not found');
+    if (!ep.hlsUrl) throw new AppError(HttpStatus.CONFLICT, 'EPISODE_PROCESSING', 'This episode is still being processed');
     return ep;
   }
 
@@ -63,17 +66,20 @@ export class PlaybackService {
     return unlock !== null;
   }
 
-  buildPlayback(ep: Episode): PlaybackInfo {
-    const { url, expiresAt } = signMediaUrl(ep.hlsUrl);
+  /** [lang] picks an AI-dubbed version when one exists for that language. */
+  buildPlayback(ep: Episode, lang?: string): PlaybackInfo {
+    const dubs = (ep.dubs ?? {}) as Record<string, string>;
+    const source = lang && dubs[lang] ? dubs[lang] : ep.hlsUrl;
+    const { url, expiresAt } = signMediaUrl(source);
     const subtitles: Record<string, string> = {};
     for (const [lang, vtt] of Object.entries((ep.subtitles ?? {}) as Record<string, string>)) {
       subtitles[lang] = signMediaUrl(vtt).url;
     }
-    return { url, subtitles, expiresAt };
+    return { url, subtitles, expiresAt, dubs: Object.keys(dubs) };
   }
 
   /** Returns a playable URL, or throws 402 EPISODE_LOCKED with the price so the app can show the paywall. */
-  async getPlayback(userId: string, episodeId: string): Promise<PlaybackInfo> {
+  async getPlayback(userId: string, episodeId: string, lang?: string): Promise<PlaybackInfo> {
     const ep = await this.findPublishedEpisode(episodeId);
     if (!(await this.isEntitled(userId, ep))) {
       throw new AppError(HttpStatus.PAYMENT_REQUIRED, 'EPISODE_LOCKED', 'This episode is locked', {
@@ -84,6 +90,6 @@ export class PlaybackService {
     if (ep.number === 1) {
       await this.prisma.series.update({ where: { id: ep.seriesId }, data: { viewCount: { increment: 1 } } });
     }
-    return this.buildPlayback(ep);
+    return this.buildPlayback(ep, lang);
   }
 }

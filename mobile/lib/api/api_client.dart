@@ -91,8 +91,9 @@ class ApiClient {
   Future<SeriesDetail> seriesDetail(String id) async =>
       SeriesDetail.fromJson(await _call<Map<String, dynamic>>('GET', '/series/$id'));
 
+  /// Plays the AI-dubbed version in the device language when one exists, otherwise the original.
   Future<Playback> playback(String episodeId) async =>
-      Playback.fromJson(await _call<Map<String, dynamic>>('GET', '/episodes/$episodeId/playback'));
+      Playback.fromJson(await _call<Map<String, dynamic>>('GET', '/episodes/$episodeId/playback', query: {'lang': locale}));
 
   /// Returns the new coin balance.
   Future<int> unlock(String episodeId) async =>

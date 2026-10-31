@@ -59,4 +59,38 @@ export const config = {
   get appUrlScheme(): string {
     return process.env.APP_URL_SCHEME ?? 'kamixo';
   },
+  get mediaDir(): string {
+    return process.env.MEDIA_DIR ?? './media';
+  },
+  get ffmpegPath(): string {
+    return process.env.FFMPEG_PATH ?? 'ffmpeg';
+  },
+  get aiProvider(): 'sandbox' | 'openai' {
+    const v = process.env.AI_PROVIDER ?? 'sandbox';
+    if (v !== 'sandbox' && v !== 'openai') throw new Error(`AI_PROVIDER must be "sandbox" or "openai", got "${v}"`);
+    return v;
+  },
+  get ai() {
+    return {
+      baseUrl: (process.env.AI_API_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, ''),
+      apiKey: process.env.AI_API_KEY ?? '',
+      transcribeModel: process.env.AI_TRANSCRIBE_MODEL ?? 'whisper-1',
+      chatModel: process.env.AI_CHAT_MODEL ?? 'gpt-4o-mini',
+      ttsModel: process.env.AI_TTS_MODEL ?? 'tts-1',
+      ttsVoice: process.env.AI_TTS_VOICE ?? 'alloy',
+    };
+  },
+  get stripeSecretKey(): string {
+    const key = process.env.STRIPE_SECRET_KEY ?? '';
+    if (!key && process.env.NODE_ENV === 'production') {
+      throw new Error('STRIPE_SECRET_KEY is required in production (sandbox web checkout is not allowed)');
+    }
+    return key;
+  },
+  get stripeWebhookSecret(): string {
+    return process.env.STRIPE_WEBHOOK_SECRET ?? '';
+  },
+  get coinUsdValue(): number {
+    return Number(process.env.COIN_USD_VALUE ?? 0.01);
+  },
 };

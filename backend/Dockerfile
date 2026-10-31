@@ -8,8 +8,11 @@ RUN npx prisma generate && npm run build && npm prune --omit=dev
 
 FROM node:22-bookworm-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
+# ffmpeg powers the media pipeline (transcoding, subtitles extraction, dubbing)
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ffmpeg && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
+ENV MEDIA_DIR=/data/media
+VOLUME ["/data/media"]
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma

@@ -41,6 +41,8 @@
     <button data-view="vip">VIP plans</button>
     <button data-view="push">Push</button>
     <button data-view="config">Config</button>
+    <button data-view="jobs">Jobs</button>
+    <button data-view="studios">Studios</button>
   </nav>
   <div style="margin-left:auto" class="row">
     <input id="key" type="password" placeholder="Admin API key" style="width:200px">
@@ -93,6 +95,8 @@ async function render() {
     if (view === 'vip') await renderVip(app);
     if (view === 'push') await renderPush(app);
     if (view === 'config') await renderConfig(app);
+    if (view === 'jobs') await renderJobs(app);
+    if (view === 'studios') await renderStudios(app);
   } catch (e) { app.innerHTML = `<div class="card">Error: ${esc(e.message)}</div>`; }
 }
 
@@ -111,6 +115,7 @@ function seriesForm(s = {}) {
     <div><label>Genres (comma separated)</label><input name="genres" value="${esc((s.genres || []).join(', '))}"></div>
     <div><label>Free episodes</label><input name="freeEpisodes" type="number" min="0" value="${esc(s.freeEpisodes ?? 5)}"></div>
     <div><label>Coins per episode</label><input name="coinsPerEpisode" type="number" min="1" value="${esc(s.coinsPerEpisode ?? 60)}"></div>
+    <div><label>Spoken language</label><input name="sourceLang" value="${esc(s.sourceLang ?? 'en')}" maxlength="2"></div>
   </div>
   <label>Description</label><textarea name="description" rows="3">${esc(s.description)}</textarea>`;
 }
@@ -120,6 +125,7 @@ function readSeriesForm(form) {
     title: f.get('title'), coverUrl: f.get('coverUrl'), description: f.get('description'),
     genres: String(f.get('genres')).split(',').map((g) => g.trim()).filter(Boolean),
     freeEpisodes: Number(f.get('freeEpisodes')), coinsPerEpisode: Number(f.get('coinsPerEpisode')),
+    sourceLang: String(f.get('sourceLang') || 'en').toLowerCase(),
   };
 }
 
@@ -158,7 +164,20 @@ async function renderSeriesDetail(app, id) {
       </div></div>
     <form id="editSeries">${seriesForm(s)}<p><button class="ghost">Save changes</button></p></form>
   </div>
-  <div class="card"><h3 style="margin-top:0">Add episode</h3>
+  <div class="card"><h3 style="margin-top:0">Upload episode video</h3>
+    <p style="color:var(--muted);margin-top:0">The file is transcoded to multi-bitrate HLS on this server (see Jobs). Or add an external HLS URL below.</p>
+    <form id="uploadEp"><div class="grid">
+      <div><label>Number</label><input name="number" type="number" min="1" value="${nextNo}"></div>
+      <div><label>Title</label><input name="title"></div>
+      <div style="grid-column:span 2"><label>Video file</label><input name="file" type="file" accept="video/*" required></div>
+    </div><p class="row"><button class="btn">Upload</button><progress style="display:none;flex:1" value="0" max="100"></progress></p></form>
+  </div>
+  <div class="card"><h3 style="margin-top:0">AI localization</h3>
+    <form id="localize" class="row"><label style="margin:0">Languages</label><input name="languages" value="es, pt, id" style="width:200px">
+      <label style="margin:0"><input type="checkbox" name="dub" style="width:auto"> also dub</label>
+      <button class="btn">Localize all uploaded episodes</button></form>
+  </div>
+  <div class="card"><h3 style="margin-top:0">Add episode by URL</h3>
     <form id="newEp"><div class="grid">
       <div><label>Number</label><input name="number" type="number" min="1" value="${nextNo}"></div>
       <div><label>Duration (sec)</label><input name="durationSec" type="number" min="0" value="90"></div>
@@ -166,13 +185,38 @@ async function renderSeriesDetail(app, id) {
       <div style="grid-column:span 2"><label>Subtitles JSON, e.g. {"en":"https://…/en.vtt"}</label><input name="subtitles" value="{}"></div>
     </div><p><button class="btn">Add episode</button></p></form>
   </div>
-  <div class="card"><table><thead><tr><th>#</th><th>Duration</th><th>HLS</th><th>Subtitles</th><th>Access</th><th></th></tr></thead>
+  <div class="card"><table><thead><tr><th>#</th><th>Duration</th><th>HLS</th><th>Subtitles</th><th>Dubs</th><th>Access</th><th></th></tr></thead>
     <tbody>${s.episodes.map((e) => `<tr><td>${e.number}</td><td>${e.durationSec}s</td>
-      <td style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(e.hlsUrl)}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e.hlsUrl ? esc(e.hlsUrl) : '<span class="pill">processing…</span>'}</td>
       <td>${esc(Object.keys(e.subtitles || {}).join(', ') || '—')}</td>
+      <td>${esc(Object.keys(e.dubs || {}).join(', ') || '—')}</td>
       <td>${e.number <= s.freeEpisodes ? 'Free' : s.coinsPerEpisode + ' coins'}</td>
-      <td><button class="ghost" data-delep="${esc(e.id)}">Delete</button></td></tr>`).join('') || '<tr><td colspan="6">No episodes yet.</td></tr>'}
+      <td class="row">${e.sourcePath ? `<button class="ghost" data-subs="${esc(e.id)}">Subtitles</button><button class="ghost" data-dub="${esc(e.id)}">Dub</button>` : ''}<button class="ghost" data-delep="${esc(e.id)}">Delete</button></td></tr>`).join('') || '<tr><td colspan="7">No episodes yet.</td></tr>'}
     </tbody></table></div>`;
+  $('#uploadEp').onsubmit = (e) => {
+    e.preventDefault();
+    const form = e.target, bar = form.querySelector('progress'); bar.style.display = 'block';
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/admin/series/${id}/episodes/upload`); xhr.setRequestHeader('x-admin-key', adminKey);
+    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) bar.value = (ev.loaded / ev.total) * 100; };
+    xhr.onload = () => { bar.style.display = 'none'; if (xhr.status < 300) { toast('Uploaded, transcoding started'); render(); } else { let m = xhr.statusText; try { m = JSON.parse(xhr.responseText).message || m; } catch {} toast(m, true); } };
+    xhr.onerror = () => { bar.style.display = 'none'; toast('Upload failed', true); };
+    xhr.send(new FormData(form));
+  };
+  $('#localize').onsubmit = async (e) => {
+    e.preventDefault(); const f = new FormData(e.target);
+    const languages = String(f.get('languages')).split(',').map((l) => l.trim().toLowerCase()).filter(Boolean);
+    try { const r = await api('POST', `/series/${id}/localize`, { languages, dub: f.get('dub') === 'on' }); toast(`${r.queued} jobs queued for ${r.episodes} episodes`); }
+    catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-subs]').forEach((b) => (b.onclick = async () => {
+    const langs = prompt('Target languages (comma separated)', 'es, pt'); if (!langs) return;
+    try { await api('POST', `/episodes/${b.dataset.subs}/subtitles`, { languages: langs.split(',').map((l) => l.trim().toLowerCase()).filter(Boolean) }); toast('Subtitle job queued'); } catch (err) { toast(err.message, true); }
+  }));
+  app.querySelectorAll('[data-dub]').forEach((b) => (b.onclick = async () => {
+    const l = prompt('Dub language', 'es'); if (!l) return;
+    try { await api('POST', `/episodes/${b.dataset.dub}/dub`, { language: l.trim().toLowerCase() }); toast('Dub job queued'); } catch (err) { toast(err.message, true); }
+  }));
   $('#back').onclick = () => { currentSeriesId = null; render(); };
   $('#toggle').onclick = async () => {
     try { await api('PATCH', '/series/' + id, { status: s.status === 'PUBLISHED' ? 'DRAFT' : 'PUBLISHED' }); toast('Status updated'); render(); }
@@ -307,6 +351,41 @@ async function renderConfig(app) {
       toast('Saved');
     } catch (err) { toast(err.message, true); }
   };
+}
+
+async function renderJobs(app) {
+  const jobs = await api('GET', '/jobs');
+  app.innerHTML = `<div class="card"><div class="row" style="justify-content:space-between"><h3 style="margin:0">Media & AI jobs</h3><button class="ghost" id="recs">Recompute recommendations</button></div>
+    <p style="color:var(--muted)">Refreshes every 5 s. Failed jobs can be retried.</p>
+    <table><thead><tr><th>When</th><th>Type</th><th>Episode</th><th>Status</th><th>Details</th><th></th></tr></thead><tbody>
+    ${jobs.map((j) => `<tr><td>${esc(new Date(j.createdAt).toLocaleString())}</td><td>${esc(j.type)}</td><td style="font-size:11px;color:var(--muted)">${esc((j.episodeId || '').slice(0, 8))}</td>
+      <td><span class="pill ${j.status === 'DONE' ? 'PUBLISHED' : ''}">${esc(j.status)}</span></td>
+      <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px">${esc(j.error || JSON.stringify(j.result))}</td>
+      <td>${j.status === 'FAILED' ? `<button class="ghost" data-retry="${esc(j.id)}">Retry</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6">No jobs yet.</td></tr>'}
+    </tbody></table></div>`;
+  $('#recs').onclick = async () => { try { const r = await api('POST', '/recommendations/recompute'); toast(`${r.pairs} similarity pairs`); } catch (err) { toast(err.message, true); } };
+  app.querySelectorAll('[data-retry]').forEach((b) => (b.onclick = async () => { await api('POST', `/jobs/${b.dataset.retry}/retry`); render(); }));
+  clearTimeout(renderJobs.t); renderJobs.t = setTimeout(() => { if (view === 'jobs') render(); }, 5000);
+}
+
+async function renderStudios(app) {
+  const studios = await api('GET', '/studios');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">New studio</h3>
+    <p style="color:var(--muted);margin-top:0">Studios sign in at <code>/studio/</code> with their key, upload series and see earnings. You publish their series from the Series page.</p>
+    <form id="newStudio"><div class="grid">
+      <div><label>Name</label><input name="name" required></div><div><label>Email</label><input name="email" type="email" required></div>
+      <div><label>Revenue share (%)</label><input name="revenueSharePct" type="number" min="0" max="100" value="50"></div>
+    </div><p><button class="btn">Create studio</button></p></form></div>
+  <div class="card"><table><thead><tr><th>Name</th><th>Email</th><th>Share</th><th>Series</th><th>Key</th><th></th></tr></thead><tbody>
+    ${studios.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.email)}</td><td>${s.revenueSharePct}%</td><td>${s._count.series}</td>
+      <td><code style="font-size:11px">${esc(s.apiKey)}</code></td><td><button class="ghost" data-rotate="${esc(s.id)}">Rotate key</button></td></tr>`).join('') || '<tr><td colspan="6">No studios yet.</td></tr>'}
+    </tbody></table></div>`;
+  $('#newStudio').onsubmit = async (e) => {
+    e.preventDefault(); const f = new FormData(e.target);
+    try { await api('POST', '/studios', { name: f.get('name'), email: f.get('email'), revenueSharePct: Number(f.get('revenueSharePct')) }); toast('Studio created'); render(); } catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-rotate]').forEach((b) => (b.onclick = async () => { if (!confirm('Rotate this studio key? The old key stops working.')) return; await api('POST', `/studios/${b.dataset.rotate}/rotate-key`); render(); }));
 }
 
 render();

@@ -18,22 +18,29 @@ const SAMPLE_SERIES = [
 
 async function main() {
   const packs = [
-    { productId: 'coins_100', coins: 100, bonusCoins: 0, priceLabel: '$0.99', sortOrder: 1 },
-    { productId: 'coins_500', coins: 500, bonusCoins: 50, priceLabel: '$4.99', sortOrder: 2 },
-    { productId: 'coins_1000', coins: 1000, bonusCoins: 150, priceLabel: '$9.99', sortOrder: 3 },
-    { productId: 'coins_2500', coins: 2500, bonusCoins: 500, priceLabel: '$19.99', sortOrder: 4 },
+    { productId: 'coins_100', coins: 100, bonusCoins: 0, priceLabel: '$0.99', priceCents: 99, sortOrder: 1 },
+    { productId: 'coins_500', coins: 500, bonusCoins: 50, priceLabel: '$4.99', priceCents: 499, sortOrder: 2 },
+    { productId: 'coins_1000', coins: 1000, bonusCoins: 150, priceLabel: '$9.99', priceCents: 999, sortOrder: 3 },
+    { productId: 'coins_2500', coins: 2500, bonusCoins: 500, priceLabel: '$19.99', priceCents: 1999, sortOrder: 4 },
   ];
   for (const p of packs) {
     await prisma.coinPack.upsert({ where: { productId: p.productId }, create: p, update: p });
   }
 
   const plans = [
-    { productId: 'vip_weekly', name: 'VIP Weekly', days: 7, priceLabel: '$4.99/week', sortOrder: 1 },
-    { productId: 'vip_monthly', name: 'VIP Monthly', days: 30, priceLabel: '$14.99/month', sortOrder: 2 },
+    { productId: 'vip_weekly', name: 'VIP Weekly', days: 7, priceLabel: '$4.99/week', priceCents: 499, sortOrder: 1 },
+    { productId: 'vip_monthly', name: 'VIP Monthly', days: 30, priceLabel: '$14.99/month', priceCents: 1499, sortOrder: 2 },
   ];
   for (const p of plans) {
     await prisma.vipPlan.upsert({ where: { productId: p.productId }, create: p, update: p });
   }
+
+  const studio = await prisma.studio.upsert({
+    where: { apiKey: 'stk_sandbox_studio_key_000000000000000000' },
+    create: { name: 'Sample Studio', email: 'studio@example.com', apiKey: 'stk_sandbox_studio_key_000000000000000000', revenueSharePct: 50 },
+    update: {},
+  });
+  console.log(`Sample studio key: ${studio.apiKey}`);
 
   if ((await prisma.series.count()) > 0) {
     console.log('Series already present, skipping sample series.');
@@ -47,6 +54,7 @@ async function main() {
         freeEpisodes: 5,
         coinsPerEpisode: 60,
         status: 'PUBLISHED',
+        studioId: i === 0 ? studio.id : null,
         publishedAt: new Date(Date.now() - i * 86400000),
         viewCount: 1000 - i * 100,
         episodes: {

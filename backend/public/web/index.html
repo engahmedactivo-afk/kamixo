@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kamixo – Short dramas</title>
+<meta name="description" content="Watch addictive vertical mini dramas: the first episodes are free.">
+<style>
+  :root { --bg:#0f0f14; --panel:#1a1a22; --line:#2c2c38; --text:#ececf1; --muted:#9a9aab; --accent:#ff3d71; }
+  * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:5; }
+  header a.logo { color:var(--text); text-decoration:none; font-weight:700; font-size:18px; } header a.logo span { color:var(--accent); }
+  header .spacer { flex:1; } .pill { background:var(--line); border-radius:99px; padding:4px 12px; font-size:13px; cursor:pointer; border:0; color:var(--text); }
+  .pill.vip { color:var(--accent); }
+  main { max-width:1100px; margin:0 auto; padding:20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px,1fr)); gap:16px; }
+  .card { cursor:pointer; } .card img { width:100%; aspect-ratio:9/16; object-fit:cover; border-radius:10px; background:var(--line); display:block; }
+  .card h3 { font-size:14px; margin:8px 0 2px; } .card p { margin:0; color:var(--muted); font-size:12px; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; } .chips button { background:var(--line); border:0; color:var(--text); padding:6px 12px; border-radius:99px; cursor:pointer; }
+  .chips button.active { background:var(--accent); }
+  .watch { display:grid; grid-template-columns: minmax(0, 420px) 1fr; gap:24px; } @media (max-width:760px) { .watch { grid-template-columns:1fr; } }
+  .player { position:relative; aspect-ratio:9/16; background:#000; border-radius:12px; overflow:hidden; max-height:80vh; }
+  .player video { width:100%; height:100%; } .player .lock { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; background:rgba(0,0,0,.75); text-align:center; padding:20px; }
+  .eps { display:grid; grid-template-columns:repeat(auto-fill, minmax(44px,1fr)); gap:8px; margin:12px 0; }
+  .eps button { aspect-ratio:1; border:0; border-radius:8px; background:var(--line); color:var(--text); cursor:pointer; font-weight:600; position:relative; }
+  .eps button.current { background:var(--accent); } .eps button.locked::after { content:'🔒'; position:absolute; top:2px; right:3px; font-size:9px; }
+  .btn { background:var(--accent); color:#fff; border:0; padding:10px 16px; border-radius:8px; cursor:pointer; font:inherit; font-weight:600; }
+  .btn.ghost { background:var(--line); } .btn:disabled { opacity:.5; cursor:default; }
+  .muted { color:var(--muted); } .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  dialog { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:14px; padding:20px; max-width:420px; width:92vw; }
+  dialog::backdrop { background:rgba(0,0,0,.6); } .packs { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:12px 0; }
+  .packs button { background:var(--line); border:0; color:var(--text); padding:14px; border-radius:10px; cursor:pointer; font:inherit; }
+  .packs b { display:block; font-size:17px; } select { background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:5px; }
+  #toast { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:var(--panel); border:1px solid var(--line); padding:10px 16px; border-radius:8px; display:none; }
+</style>
+</head>
+<body>
+<header>
+  <a class="logo" href="#/">Kami<span>xo</span></a>
+  <div class="spacer"></div>
+  <button class="pill" id="coins">… coins</button>
+  <button class="pill vip hidden" id="vipPill">VIP</button>
+</header>
+<main id="app"></main>
+<dialog id="paywall"></dialog>
+<div id="toast"></div>
+<script src="vendor/hls.min.js"></script>
+<script>
+const API = location.origin;
+const $ = (s, r = document) => r.querySelector(s);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const lang = (navigator.language || 'en').slice(0, 2);
+
+// ---- auth: a guest id per browser, same as the mobile app's device id ----
+let token = null;
+function deviceId() {
+  try { let id = localStorage.getItem('kamixoDeviceId'); if (!id) { id = crypto.randomUUID(); localStorage.setItem('kamixoDeviceId', id); } return id; } catch { return crypto.randomUUID(); }
+}
+async function login() {
+  const r = await fetch(API + '/auth/guest', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ deviceId: deviceId(), locale: lang }) });
+  token = (await r.json()).accessToken;
+}
+async function api(method, path, body, retry = true) {
+  if (!token) await login();
+  const r = await fetch(API + path, { method, headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + token }, body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401 && retry) { token = null; return api(method, path, body, false); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(data.message || r.statusText); e.code = data.code; e.body = data; throw e; }
+  return data;
+}
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3000); }
+
+let me = { balance: 0, vip: { active: false } };
+async function refreshMe() {
+  me = await api('GET', '/me');
+  $('#coins').textContent = `${me.balance} coins`;
+  $('#vipPill').classList.toggle('hidden', !me.vip.active);
+}
+$('#coins').onclick = () => openPaywall(null);
+
+// ---- router ----
+window.addEventListener('hashchange', route);
+async function route() {
+  const app = $('#app');
+  const m = location.hash.match(/^#\/series\/([0-9a-f-]{36})(?:\?ep=(\d+))?/);
+  try {
+    if (m) await renderSeries(app, m[1], Number(m[2]) || null);
+    else await renderHome(app);
+  } catch (e) { app.innerHTML = `<p>Something went wrong: ${esc(e.message)}</p>`; }
+}
+
+// ---- home ----
+let genre = null;
+async function renderHome(app) {
+  stopPlayer();
+  const [genres, list, cont] = await Promise.all([api('GET', '/genres'), api('GET', `/series?limit=50${genre ? '&genre=' + encodeURIComponent(genre) : ''}`), api('GET', '/me/continue-watching')]);
+  app.innerHTML = `
+    ${cont.length ? `<h2>Continue watching</h2><div class="grid">${cont.map((c) => card({ id: c.seriesId, title: c.title, coverUrl: c.coverUrl, sub: `EP ${c.episodeNumber}/${c.totalEpisodes}` }, c.episodeNumber)).join('')}</div>` : ''}
+    <h2>Discover</h2>
+    <div class="chips"><button class="${genre ? '' : 'active'}" data-g="">All</button>${genres.map((g) => `<button class="${genre === g.genre ? 'active' : ''}" data-g="${esc(g.genre)}">${esc(g.genre)}</button>`).join('')}</div>
+    <div class="grid">${list.items.map((s) => card({ id: s.id, title: s.title, coverUrl: s.coverUrl, sub: `${s.totalEpisodes} episodes · ${s.freeEpisodes} free` })).join('') || '<p class="muted">No dramas yet.</p>'}</div>`;
+  app.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { genre = b.dataset.g || null; renderHome(app); }));
+}
+function card(s, ep) {
+  return `<a class="card" href="#/series/${esc(s.id)}${ep ? '?ep=' + ep : ''}" style="text-decoration:none;color:inherit"><img src="${esc(s.coverUrl)}" alt="" loading="lazy"><h3>${esc(s.title)}</h3><p>${esc(s.sub)}</p></a>`;
+}
+
+// ---- series / player ----
+let hls = null, current = null;
+function stopPlayer() { if (hls) { hls.destroy(); hls = null; } current = null; }
+
+async function renderSeries(app, id, startEp) {
+  stopPlayer();
+  const d = await api('GET', `/series/${id}`);
+  current = { d, ep: null };
+  const start = startEp || (d.progress && d.progress.episodeNumber) || 1;
+  app.innerHTML = `
+    <div class="watch">
+      <div>
+        <div class="player"><video id="video" controls playsinline></video><div class="lock hidden" id="lock"></div></div>
+        <div class="row" style="margin-top:10px"><span id="epTitle" class="muted"></span><span class="spacer" style="flex:1"></span>
+          <label class="muted" id="dubWrap" style="display:none">Audio <select id="dub"></select></label></div>
+      </div>
+      <div>
+        <h1 style="margin:0 0 4px">${esc(d.series.title)}</h1>
+        <p class="muted" style="margin:0 0 8px">${esc(d.series.genres.join(' · '))} · ${d.series.totalEpisodes} episodes · ${d.series.freeEpisodes} free · ${d.series.coinsPerEpisode} coins per episode</p>
+        <p>${esc(d.series.description)}</p>
+        <div class="eps">${d.episodes.map((e) => `<button data-ep="${e.number}" class="${e.locked ? 'locked' : ''}" ${e.ready ? '' : 'disabled title="Processing"'}>${e.number}</button>`).join('')}</div>
+        <p class="row"><button class="btn ghost" id="share">Share</button><button class="btn ghost" id="vipBtn">${me.vip.active ? 'You are VIP' : 'Go VIP'}</button></p>
+        <h3>You may also like</h3><div class="grid" id="related"></div>
+      </div>
+    </div>`;
+  app.querySelectorAll('[data-ep]').forEach((b) => (b.onclick = () => playEpisode(Number(b.dataset.ep))));
+  $('#share').onclick = async () => { const url = `${API}/watch/${id}`; try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { prompt('Copy link', url); } };
+  $('#vipBtn').onclick = () => openPaywall(null, 'vip');
+  api('GET', `/series/${id}/related`).then((r) => { $('#related').innerHTML = r.map((s) => card({ id: s.id, title: s.title, coverUrl: s.coverUrl, sub: `${s.totalEpisodes} episodes` })).join(''); }).catch(() => {});
+  playEpisode(start);
+}
+
+async function playEpisode(n, dubLang) {
+  const { d } = current;
+  const ep = d.episodes.find((e) => e.number === n);
+  if (!ep) return;
+  current.ep = ep;
+  document.querySelectorAll('[data-ep]').forEach((b) => b.classList.toggle('current', Number(b.dataset.ep) === n));
+  $('#epTitle').textContent = `Episode ${n}${ep.title ? ' · ' + ep.title : ''}`;
+  const lock = $('#lock'), video = $('#video');
+  if (hls) { hls.destroy(); hls = null; }
+  let pb;
+  try {
+    pb = await api('GET', `/episodes/${ep.id}/playback${dubLang ? '?lang=' + dubLang : (dubLang === undefined ? '?lang=' + lang : '')}`);
+  } catch (e) {
+    if (e.code === 'EPISODE_LOCKED') {
+      lock.classList.remove('hidden');
+      lock.innerHTML = `<div style="font-size:40px">🔒</div><b>Episode ${n} is locked</b><span class="muted">${e.body.price} coins · you have ${me.balance}</span><button class="btn" id="unlockBtn">Unlock</button>`;
+      $('#unlockBtn').onclick = () => openPaywall(ep);
+      return;
+    }
+    lock.classList.remove('hidden'); lock.textContent = e.message; return;
+  }
+  lock.classList.add('hidden');
+  // Dub picker
+  const wrap = $('#dubWrap'), sel = $('#dub');
+  if (pb.dubs.length) {
+    wrap.style.display = '';
+    sel.innerHTML = `<option value="">Original</option>${pb.dubs.map((l) => `<option value="${l}" ${pb.url.includes('/' + l + '/') ? 'selected' : ''}>${l.toUpperCase()} (AI dub)</option>`).join('')}`;
+    sel.onchange = () => playEpisode(n, sel.value || '');
+  } else wrap.style.display = 'none';
+  // Subtitles
+  [...video.querySelectorAll('track')].forEach((t) => t.remove());
+  for (const [l, url] of Object.entries(pb.subtitles)) {
+    const t = document.createElement('track'); t.kind = 'subtitles'; t.srclang = l; t.label = l.toUpperCase(); t.src = url; if (l === lang) t.default = true; video.appendChild(t);
+  }
+  if (Hls.isSupported()) { hls = new Hls(); hls.loadSource(pb.url); hls.attachMedia(video); }
+  else video.src = pb.url; // Safari plays HLS natively
+  video.currentTime = d.progress && d.progress.episodeNumber === n ? d.progress.positionSec : 0;
+  video.play().catch(() => {});
+  video.ontimeupdate = throttle(() => api('PUT', '/progress', { seriesId: d.series.id, episodeNumber: n, positionSec: Math.floor(video.currentTime) }).catch(() => {}), 5000);
+  video.onended = () => { if (d.episodes.some((e) => e.number === n + 1)) playEpisode(n + 1); };
+  api('POST', '/events', { events: [{ name: 'ep_start', props: { seriesId: d.series.id, ep: n, platform: 'web' } }] }).catch(() => {});
+}
+function throttle(fn, ms) { let last = 0; return () => { const now = Date.now(); if (now - last > ms) { last = now; fn(); } }; }
+
+// ---- paywall: unlock with coins, buy coins or VIP with Stripe Checkout ----
+async function openPaywall(ep, tab) {
+  const dlg = $('#paywall');
+  const [packs, plans] = await Promise.all([api('GET', '/coin-packs'), api('GET', '/subscriptions/plans')]);
+  const price = ep ? current.d.series.coinsPerEpisode : 0;
+  let showVip = tab === 'vip';
+  const render = () => {
+    dlg.innerHTML = `
+      <h3 style="margin-top:0">${ep ? `Unlock Episode ${ep.number}` : 'Get coins'}</h3>
+      <p class="muted">${ep ? `${price} coins · ` : ''}Balance: ${me.balance} coins</p>
+      ${ep && me.balance >= price ? `<button class="btn" id="unlock" style="width:100%">Unlock for ${price} coins</button>` : ''}
+      <p class="row"><button class="pill ${showVip ? '' : 'vip'}" id="tabCoins">Buy coins</button><button class="pill ${showVip ? 'vip' : ''}" id="tabVip">Go VIP</button></p>
+      ${showVip
+        ? `<div class="packs">${plans.map((p) => `<button data-vip="${esc(p.productId)}"><b>${esc(p.name)}</b>${p.days} days · ${esc(p.priceLabel)}</button>`).join('')}</div><p class="muted" style="font-size:12px">Web VIP is a fixed pass for the plan's days; it does not auto-renew.</p>`
+        : `<div class="packs">${packs.map((p) => `<button data-pack="${esc(p.productId)}"><b>${p.coins} coins</b>${p.bonusCoins ? `+${p.bonusCoins} bonus · ` : ''}${esc(p.priceLabel)}</button>`).join('')}</div>`}
+      <p style="text-align:right;margin:0"><button class="btn ghost" id="close">Close</button></p>`;
+    $('#close', dlg).onclick = () => dlg.close();
+    $('#tabCoins', dlg).onclick = () => { showVip = false; render(); };
+    $('#tabVip', dlg).onclick = () => { showVip = true; render(); };
+    const u = $('#unlock', dlg); if (u) u.onclick = async () => {
+      try { const r = await api('POST', `/episodes/${ep.id}/unlock`); me.balance = r.balance; await refreshMe(); ep.locked = false; dlg.close(); playEpisode(ep.number); }
+      catch (e) { toast(e.message); }
+    };
+    dlg.querySelectorAll('[data-pack],[data-vip]').forEach((b) => (b.onclick = () => checkout(b.dataset.pack ? 'coins' : 'vip', b.dataset.pack || b.dataset.vip)));
+  };
+  const checkout = async (kind, productId) => {
+    try {
+      const r = await api('POST', '/web/checkout', { kind, productId });
+      if (r.url) { location.href = r.url; return; }
+      await refreshMe();
+      toast(kind === 'vip' ? 'VIP activated (sandbox)' : 'Coins added (sandbox)');
+      if (ep && (me.vip.active || me.balance >= price)) { if (!me.vip.active) await api('POST', `/episodes/${ep.id}/unlock`); await refreshMe(); dlg.close(); route(); }
+      else render();
+    } catch (e) { toast(e.message); }
+  };
+  render();
+  if (!dlg.open) dlg.showModal();
+}
+
+(async () => {
+  await login();
+  await refreshMe();
+  if (location.search.includes('paid=1')) { history.replaceState(null, '', location.pathname + location.hash); toast('Payment received. Thank you!'); }
+  route();
+})();
+</script>
+<style>.hidden{display:none !important}</style>
+</body>
+</html>

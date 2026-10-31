@@ -22,10 +22,13 @@ class SeriesSummary {
 class Playback {
   final String url;
   final Map<String, String> subtitles;
+  /// Languages with an AI-dubbed audio version
+  final List<String> dubs;
 
   Playback.fromJson(Map<String, dynamic> j)
       : url = j['url'] as String,
-        subtitles = Map<String, String>.from((j['subtitles'] ?? {}) as Map);
+        subtitles = Map<String, String>.from((j['subtitles'] ?? {}) as Map),
+        dubs = List<String>.from((j['dubs'] ?? []) as List);
 }
 
 class FeedItem {

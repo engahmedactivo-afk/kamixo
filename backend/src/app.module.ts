@@ -2,6 +2,11 @@ import { Controller, Get, Module } from '@nestjs/common';
 import { AdminModule } from './admin/admin.module';
 import { AdsModule } from './ads/ads.module';
 import { MeModule } from './me.module';
+import { MediaModule } from './media/media.module';
+import { PaymentsModule } from './payments/payments.module';
+import { RecommendationsModule } from './recommendations/recommendations.module';
+import { StudioModule } from './studio/studio.module';
+import { WebModule } from './web/web.module';
 import { PushModule } from './push/push.module';
 import { RemoteConfigModule } from './remote-config/remote-config.module';
 import { RewardsModule } from './rewards/rewards.module';
@@ -40,6 +45,11 @@ class HealthController {
     RemoteConfigModule,
     WebhooksModule,
     MeModule,
+    MediaModule,
+    RecommendationsModule,
+    PaymentsModule,
+    StudioModule,
+    WebModule,
   ],
   controllers: [HealthController],
 })

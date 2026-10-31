@@ -8,16 +8,28 @@ import {
   Module,
   NotFoundException,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { randomBytes } from 'crypto';
+import { JobsService } from '../media/jobs.service';
+import { MediaService } from '../media/media.module';
+import { videoUpload } from '../media/upload';
+import { RecommendationsModule, RecommendationsService } from '../recommendations/recommendations.module';
 import { PartialType } from '@nestjs/mapped-types';
 import { Prisma } from '@prisma/client';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsBoolean,
+  IsEmail,
   IsIn,
   IsInt,
   IsObject,
@@ -25,6 +37,7 @@ import {
   IsString,
   IsUrl,
   Length,
+  Matches,
   Max,
   Min,
 } from 'class-validator';
@@ -40,10 +53,27 @@ export class CreateSeriesDto {
   @IsString({ each: true }) @ArrayMaxSize(10) genres: string[];
   @IsInt() @Min(0) @Max(1000) freeEpisodes: number;
   @IsInt() @Min(1) @Max(100000) coinsPerEpisode: number;
+  @IsOptional() @Matches(/^[a-z]{2}$/) sourceLang?: string;
+  @IsOptional() @IsString() @Length(36, 36) studioId?: string | null;
 }
 export class UpdateSeriesDto extends PartialType(CreateSeriesDto) {
   @IsOptional() @IsIn(['DRAFT', 'PUBLISHED']) status?: 'DRAFT' | 'PUBLISHED';
 }
+
+export class SubtitlesJobDto {
+  /** Target languages, e.g. ["es","pt","id"]. The source language is always included. */
+  @IsString({ each: true }) @Matches(/^[a-z]{2}$/, { each: true }) @ArrayMinSize(1) @ArrayMaxSize(20) languages: string[];
+}
+export class DubJobDto {
+  @Matches(/^[a-z]{2}$/) language: string;
+}
+
+export class StudioDto {
+  @IsString() @Length(1, 120) name: string;
+  @IsEmail() email: string;
+  @IsOptional() @IsInt() @Min(0) @Max(100) revenueSharePct?: number;
+}
+export class UpdateStudioDto extends PartialType(StudioDto) {}
 
 export class CreateEpisodeDto {
   @IsInt() @Min(1) @Max(10000) number: number;
@@ -60,6 +90,7 @@ export class CoinPackDto {
   @IsInt() @Min(1) coins: number;
   @IsOptional() @IsInt() @Min(0) bonusCoins?: number;
   @IsString() @Length(1, 30) priceLabel: string;
+  @IsOptional() @IsInt() @Min(0) priceCents?: number;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsInt() sortOrder?: number;
 }
@@ -70,6 +101,7 @@ export class VipPlanDto {
   @IsString() @Length(1, 60) name: string;
   @IsInt() @Min(1) @Max(366) days: number;
   @IsString() @Length(1, 30) priceLabel: string;
+  @IsOptional() @IsInt() @Min(0) priceCents?: number;
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsInt() sortOrder?: number;
 }
@@ -118,6 +150,9 @@ export class AdminController {
     private readonly prisma: PrismaService,
     private readonly push: PushService,
     private readonly remoteConfig: RemoteConfigService,
+    private readonly media: MediaService,
+    private readonly jobs: JobsService,
+    private readonly recs: RecommendationsService,
   ) {}
 
   @Get('stats')
@@ -151,7 +186,7 @@ export class AdminController {
   listSeries() {
     return this.prisma.series.findMany({
       orderBy: { createdAt: 'desc' },
-      include: { _count: { select: { episodes: true } } },
+      include: { _count: { select: { episodes: true } }, studio: { select: { id: true, name: true } } },
     });
   }
 
@@ -215,6 +250,85 @@ export class AdminController {
   private async notifySeriesWatchers(seriesId: string, msg: { title: string; body: string; data: Record<string, string> }) {
     const watchers = await this.prisma.watchProgress.findMany({ where: { seriesId }, select: { userId: true } });
     return this.push.sendToUsers(watchers.map((w) => w.userId), msg);
+  }
+
+  /** Upload a video file; the episode appears once transcoding finishes. multipart: file, number, title */
+  @Post('series/:id/episodes/upload')
+  @UseInterceptors(FileInterceptor('file', videoUpload()))
+  uploadEpisode(
+    @Param('id', ParseUUIDPipe) seriesId: string,
+    @UploadedFile() file: Express.Multer.File | undefined,
+    @Body('number', ParseIntPipe) number: number,
+    @Body('title') title?: string,
+  ) {
+    if (!file) throw new BadRequestException('Missing video file');
+    return this.media.createEpisodeFromUpload(seriesId, file, { number, title });
+  }
+
+  // ---- AI localization ----
+  @Post('episodes/:id/subtitles')
+  subtitlesJob(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SubtitlesJobDto) {
+    return this.jobs.enqueue('SUBTITLES', id, { languages: dto.languages });
+  }
+
+  @Post('episodes/:id/dub')
+  dubJob(@Param('id', ParseUUIDPipe) id: string, @Body() dto: DubJobDto) {
+    return this.jobs.enqueue('DUB', id, { language: dto.language });
+  }
+
+  /** Queue subtitles (and optionally dubs) for every episode of a series. */
+  @Post('series/:id/localize')
+  async localizeSeries(@Param('id', ParseUUIDPipe) seriesId: string, @Body() dto: SubtitlesJobDto & { dub?: boolean }) {
+    const eps = await this.prisma.episode.findMany({ where: { seriesId, sourcePath: { not: null } }, select: { id: true } });
+    let queued = 0;
+    for (const e of eps) {
+      await this.jobs.enqueue('SUBTITLES', e.id, { languages: dto.languages });
+      queued++;
+      if (dto.dub) {
+        for (const language of dto.languages) {
+          await this.jobs.enqueue('DUB', e.id, { language });
+          queued++;
+        }
+      }
+    }
+    return { episodes: eps.length, queued };
+  }
+
+  @Get('jobs')
+  listJobs(@Query('status') status?: string) {
+    return this.jobs.list(status && ['QUEUED', 'RUNNING', 'DONE', 'FAILED'].includes(status) ? { status: status as 'QUEUED' } : {});
+  }
+
+  @Post('jobs/:id/retry')
+  async retryJob(@Param('id', ParseUUIDPipe) id: string) {
+    return orNotFound(this.prisma.job.update({ where: { id, status: 'FAILED' }, data: { status: 'QUEUED', error: null } }));
+  }
+
+  // ---- Studios ----
+  @Get('studios')
+  listStudios() {
+    return this.prisma.studio.findMany({ orderBy: { createdAt: 'desc' }, include: { _count: { select: { series: true } } } });
+  }
+
+  @Post('studios')
+  createStudio(@Body() dto: StudioDto) {
+    return this.prisma.studio.create({ data: { ...dto, apiKey: `stk_${randomBytes(24).toString('hex')}` } });
+  }
+
+  @Patch('studios/:id')
+  updateStudio(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateStudioDto) {
+    return orNotFound(this.prisma.studio.update({ where: { id }, data: dto }));
+  }
+
+  @Post('studios/:id/rotate-key')
+  rotateKey(@Param('id', ParseUUIDPipe) id: string) {
+    return orNotFound(this.prisma.studio.update({ where: { id }, data: { apiKey: `stk_${randomBytes(24).toString('hex')}` } }));
+  }
+
+  // ---- Recommendations ----
+  @Post('recommendations/recompute')
+  recompute() {
+    return this.recs.recompute();
   }
 
   @Patch('episodes/:id')
@@ -314,5 +428,5 @@ export class AdminController {
   }
 }
 
-@Module({ imports: [RemoteConfigModule], controllers: [AdminController] })
+@Module({ imports: [RemoteConfigModule, RecommendationsModule], controllers: [AdminController] })
 export class AdminModule {}

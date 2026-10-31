@@ -19,6 +19,7 @@ import { AuthUser, CurrentUser, UserAuthGuard } from '../auth/auth.guards';
 import { PrismaService } from '../common/prisma.service';
 import { PlaybackModule } from '../playback/playback.module';
 import { isFreeEpisode, PlaybackService } from '../playback/playback.service';
+import { RecommendationsModule, RecommendationsService } from '../recommendations/recommendations.module';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 const MAX_PAGE = 50;
@@ -43,6 +44,7 @@ export class CatalogService {
     private readonly prisma: PrismaService,
     private readonly playback: PlaybackService,
     private readonly subs: SubscriptionsService,
+    private readonly recs: RecommendationsService,
   ) {}
 
   async genres(): Promise<{ genre: string; count: number }[]> {
@@ -54,16 +56,29 @@ export class CatalogService {
     return rows.map((r) => ({ genre: r.genre, count: Number(r.count) }));
   }
 
-  /** Full-screen swipe feed: popular series with episode 1 ready to autoplay. */
-  async feed(offset: number, limit: number) {
+  /**
+   * Full-screen swipe feed with episode 1 ready to autoplay.
+   * Personalized for users with history (collaborative filtering), popularity for everyone else.
+   */
+  async feed(userId: string, offset: number, limit: number) {
     limit = Math.min(Math.max(limit, 1), MAX_PAGE);
-    const series = await this.prisma.series.findMany({
-      where: { status: 'PUBLISHED', episodes: { some: { number: 1 } } },
-      orderBy: [{ viewCount: 'desc' }, { publishedAt: 'desc' }, { id: 'asc' }],
-      skip: offset,
-      take: limit,
-      include: { _count: { select: { episodes: true } }, episodes: { where: { number: 1 } } },
-    });
+    const ranked = await this.recs.rankForUser(userId);
+    const include = { _count: { select: { episodes: true } }, episodes: { where: { number: 1 } } } as const;
+    let series;
+    if (ranked) {
+      const ids = ranked.slice(offset, offset + limit);
+      const rows = await this.prisma.series.findMany({ where: { id: { in: ids } }, include });
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      series = ids.map((id) => byId.get(id)!).filter(Boolean);
+    } else {
+      series = await this.prisma.series.findMany({
+        where: { status: 'PUBLISHED', episodes: { some: { number: 1, hlsUrl: { not: '' } } } },
+        orderBy: [{ viewCount: 'desc' }, { publishedAt: 'desc' }, { id: 'asc' }],
+        skip: offset,
+        take: limit,
+        include,
+      });
+    }
     return {
       items: series.map((s) => {
         const ep1 = s.episodes[0];
@@ -102,7 +117,7 @@ export class CatalogService {
       where: { id: seriesId, status: 'PUBLISHED' },
       include: {
         _count: { select: { episodes: true } },
-        episodes: { orderBy: { number: 'asc' }, select: { id: true, number: true, title: true, durationSec: true } },
+        episodes: { orderBy: { number: 'asc' }, select: { id: true, number: true, title: true, durationSec: true, hlsUrl: true, dubs: true } },
       },
     });
     if (!s) throw new NotFoundException('Series not found');
@@ -117,9 +132,9 @@ export class CatalogService {
     const unlocked = new Set(unlocks.map((u) => u.episodeId));
     return {
       series: summary(s),
-      episodes: s.episodes.map((e) => {
+      episodes: s.episodes.map(({ hlsUrl, dubs, ...e }) => {
         const free = isFreeEpisode(e, s);
-        return { ...e, free, locked: !free && !vip && !unlocked.has(e.id) };
+        return { ...e, free, locked: !free && !vip && !unlocked.has(e.id), ready: hlsUrl !== '', dubs: Object.keys((dubs ?? {}) as object) };
       }),
       progress: progress ? { episodeNumber: progress.episodeNumber, positionSec: progress.positionSec } : null,
       vip,
@@ -139,10 +154,11 @@ export class CatalogController {
 
   @Get('feed')
   feed(
+    @CurrentUser() user: AuthUser,
     @Query('offset', new DefaultValuePipe(0), ParseIntPipe) offset: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
   ) {
-    return this.catalog.feed(Math.max(offset, 0), limit);
+    return this.catalog.feed(user.id, Math.max(offset, 0), limit);
   }
 
   @Get('series')
@@ -199,7 +215,7 @@ main{max-width:360px;padding:24px;text-align:center}img{width:200px;border-radiu
 }
 
 @Module({
-  imports: [PlaybackModule],
+  imports: [PlaybackModule, RecommendationsModule],
   controllers: [CatalogController, ShareController],
   providers: [CatalogService],
 })

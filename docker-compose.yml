@@ -25,6 +25,12 @@ services:
       JWT_SECRET: dev-only-change-me
       ADMIN_API_KEY: dev-admin-key
       PURCHASE_VERIFIER: sandbox
+      AD_REWARD_VERIFIER: sandbox
+      AI_PROVIDER: sandbox
+      MEDIA_DIR: /data/media
+      PUBLIC_BASE_URL: http://localhost:3000
+    volumes: [media:/data/media]
 
 volumes:
   db:
+  media:

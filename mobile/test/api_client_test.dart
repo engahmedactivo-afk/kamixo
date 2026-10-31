@@ -25,6 +25,8 @@ void main() {
       } else if (auth == null || (expireNext && auth == 'Bearer tok1')) {
         res.statusCode = 401;
         res.write(jsonEncode({'statusCode': 401, 'message': 'Invalid or expired token'}));
+      } else if (req.uri.path.endsWith('/playback')) {
+        res.write(jsonEncode({'url': 'https://x/${req.uri.queryParameters['lang'] ?? 'none'}/m.m3u8', 'subtitles': {}, 'dubs': ['es']}));
       } else if (req.uri.path == '/wallet') {
         res.write(jsonEncode({'balance': 120, 'entries': []}));
       } else if (req.uri.path.endsWith('/unlock')) {
@@ -52,6 +54,12 @@ void main() {
     expireNext = true;
     expect(await api.balance(), 120);
     expect(logins, 2);
+  });
+
+  test('asks for the dub in the device language', () async {
+    final pb = await api.playback('e1');
+    expect(pb.url, 'https://x/en/m.m3u8');
+    expect(pb.dubs, ['es']);
   });
 
   test('maps backend errors to ApiException with a code', () async {

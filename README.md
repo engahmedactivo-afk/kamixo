@@ -2,7 +2,7 @@
 
 A short-drama (micro-drama) streaming app: vertical episodes of 1–3 minutes, a few free episodes per series, and coins to unlock the rest. See [`docs/PLAN.md`](docs/PLAN.md) for the product analysis and roadmap.
 
-**Status: Phase 1 (MVP) and Phase 2 (monetization depth) are implemented.**
+**Status: Phases 1–3 are implemented (MVP, monetization depth, scale features).**
 
 | Folder | What it is |
 |---|---|
@@ -29,6 +29,14 @@ A short-drama (micro-drama) streaming app: vertical episodes of 1–3 minutes, a
 - **Push notifications:** FCM HTTP v1 (service account, no SDK). Admin broadcast, automatic "new episode" alerts to everyone who started that series, and "you stopped at episode N" come-back reminders.
 - **Deep links:** `kamixo://series/<id>?ep=N` opens the app on that episode; the backend serves a share/ad landing page at `/s/<id>?ep=N` that redirects into the app. Ads should link to that page.
 - **Remote config and A/B tests:** first-purchase bonus, which paywall tab shows first, and named experiments whose variant is assigned per user and attached to every analytics event.
+
+## Features in Phase 3
+
+- **Self-hosted media pipeline:** upload an MP4 in the admin or studio portal; ffmpeg transcodes it to multi-bitrate HLS (720p/480p) served from `MEDIA_DIR` at `/media/`. No Mux/Cloudflare needed to start (put a CDN in front for production). Episodes show as "processing" until the job is done.
+- **AI subtitles and dubbing:** one click queues speech-to-text (Whisper), translation (an LLM) and text-to-speech per episode. Subtitles become WebVTT files, dubs become a separate HLS version per language; the apps automatically pick the dub matching the device language. Works with any OpenAI-compatible API, and a sandbox provider in development.
+- **Recommendations:** "users who watched A also watched B" similarity is recomputed hourly in SQL. The feed is personalized for anyone with watch history (new users still get popularity), and every series has a "You may also like" row.
+- **Web player at `/web/`:** same catalog and account model as the apps (hls.js, subtitles, dub picker, continue watching), with **Stripe Checkout** for coins and VIP passes, so web sales avoid the 15–30% store fee. SEO pages at `/watch/<id>` render structured data for crawlers, plus `sitemap.xml` and `robots.txt`.
+- **Studio portal at `/studio/`:** content partners sign in with a key, create series (as drafts you review), upload episodes with a progress bar, follow processing, and see monthly earnings based on coins spent on their episodes and their revenue share.
 
 ## Run the backend
 
@@ -81,6 +89,16 @@ Without RevenueCat keys, the app uses a **sandbox store**: buying coins is free 
 
 The app configures RevenueCat with `appUserID` set to the backend user id. The backend then confirms each transaction with RevenueCat before crediting coins.
 
+### Phase 3 integrations
+
+| Integration | Backend `.env` | Notes |
+|---|---|---|
+| Media pipeline | `MEDIA_DIR`, `FFMPEG_PATH`, `PUBLIC_BASE_URL` | ffmpeg must be installed (the Dockerfile includes it). Media is served at `/media/`; point a CDN at it in production. |
+| AI localization | `AI_PROVIDER=openai`, `AI_API_BASE_URL`, `AI_API_KEY`, `AI_TRANSCRIBE_MODEL`, `AI_CHAT_MODEL`, `AI_TTS_MODEL`, `AI_TTS_VOICE` | Any OpenAI-compatible API (OpenAI, Azure OpenAI, Groq, a self-hosted Whisper server). Queue jobs from the admin ("Localize") or `POST /admin/series/:id/localize`. |
+| Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`; webhook event `checkout.session.completed` → `<PUBLIC_BASE_URL>/webhooks/stripe` | Set `priceCents` on coin packs and VIP plans. Web VIP is a fixed pass of the plan's days (no auto-renew). Do not link to web payments from inside the iOS/Android apps. |
+| Studios | `COIN_USD_VALUE` (for earnings reports) | Create studios in the admin; give them the key for `/studio/`. |
+| Jobs & recommendations | `JOB_RUNNER=off` on extra instances | Jobs and the hourly similarity recompute run inside the API process; with several instances keep one runner. |
+
 ### Phase 2 integrations
 
 | Integration | Backend `.env` | App `--dart-define` |
@@ -127,9 +145,23 @@ All user endpoints need `Authorization: Bearer <token>` from `POST /auth/guest`.
 | GET/POST | `/rewards`, `/rewards/check-in`, `/rewards/tasks` | Daily check-in, tasks |
 | POST | `/me/push-token` | `{token, platform}` |
 | GET | `/s/:id?ep=N` | Public share / deep-link page |
+| GET | `/series/:id/related` | Recommendations |
+| GET | `/episodes/:id/playback?lang=xx` | Dubbed version when available |
+| POST | `/web/checkout` | `{kind: coins\|vip, productId}` → Stripe Checkout URL (or sandbox) |
+| GET | `/watch/:id`, `/sitemap.xml`, `/robots.txt` | SEO pages for the web player |
+| * | `/studio/...` | Header `x-studio-key` (me, series, upload, jobs, earnings) |
+| POST | `/webhooks/stripe` | Stripe webhook (signature verified) |
 | POST | `/webhooks/revenuecat`, GET `/webhooks/admob/ssv` | Store / ad callbacks |
-| * | `/admin/...` | Header `x-admin-key` (series, episodes, coin packs, VIP plans, push, settings) |
+| * | `/admin/...` | Header `x-admin-key` (series, episodes, uploads, localization jobs, coin packs, VIP plans, push, settings, studios) |
 
-## Next: Phase 3
+## Pages
 
-AI dubbing pipeline, recommendations, a web player with Stripe payments, and a studio/creator portal. See `docs/PLAN.md`.
+| URL | Who | What |
+|---|---|---|
+| `/web/` | viewers | Web player |
+| `/admin/` | you | Content, pricing, push, config, jobs, studios |
+| `/studio/` | content partners | Upload series, processing, earnings |
+
+## What's next
+
+Everything in `docs/PLAN.md` is built. Natural follow-ups: S3/R2 storage for media instead of local disk, a proper queue (BullMQ) once there is more than one API instance, auto-renewing web subscriptions via Stripe Billing, and interactive/choose-your-path episodes.

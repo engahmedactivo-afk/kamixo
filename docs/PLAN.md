@@ -90,7 +90,7 @@ short-drama app worldwide, competing with ReelShort, DramaBox, NetShort and Free
 - Push notifications ("new episodes", "you stopped at ep 12").
 - Deep links from ads to a specific series and episode, plus MMP integration.
 
-### Phase 3: Scale (month 5+)
+### Phase 3: Scale (month 5+) ✅ implemented, see README
 - AI dubbing pipeline for 10+ languages.
 - Recommendation model (collaborative filtering on watch-completion).
 - Web version (SEO plus web payments via Stripe, which avoids the 15–30% store fee where allowed).

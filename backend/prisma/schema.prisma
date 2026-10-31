@@ -56,11 +56,16 @@ model Series {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
   publishedAt     DateTime?
+  /// Language the source audio is in (BCP-47 two-letter)
+  sourceLang      String       @default("en")
+  studioId        String?
 
+  studio   Studio?         @relation(fields: [studioId], references: [id], onDelete: SetNull)
   episodes Episode[]
   progress WatchProgress[]
 
   @@index([status, publishedAt])
+  @@index([studioId])
 }
 
 model Episode {
@@ -72,6 +77,10 @@ model Episode {
   hlsUrl      String
   /// Map of language code -> WebVTT URL, e.g. {"en": "https://.../ep1.en.vtt"}
   subtitles   Json   @default("{}")
+  /// Map of language code -> HLS URL of an AI-dubbed version
+  dubs        Json   @default("{}")
+  /// Uploaded source file (local path under MEDIA_DIR), when the media pipeline produced this episode
+  sourcePath  String?
 
   series  Series   @relation(fields: [seriesId], references: [id], onDelete: Cascade)
   unlocks Unlock[]
@@ -87,6 +96,8 @@ model CoinPack {
   bonusCoins Int     @default(0)
   /// Display-only; the store's localized price is shown in the app when available
   priceLabel String
+  /// Price for web (Stripe) checkout, in USD cents
+  priceCents Int     @default(0)
   active     Boolean @default(true)
   sortOrder  Int     @default(0)
 }
@@ -165,6 +176,8 @@ model VipPlan {
   /// Fallback length used by the sandbox verifier; real expiry comes from the store.
   days       Int
   priceLabel String
+  /// Price for web (Stripe) checkout, in USD cents
+  priceCents Int     @default(0)
   active     Boolean @default(true)
   sortOrder  Int     @default(0)
 }
@@ -233,4 +246,59 @@ model PushToken {
 model AppSetting {
   key   String @id
   value Json
+}
+
+enum JobType {
+  TRANSCODE
+  SUBTITLES
+  DUB
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+/// Background media/AI work, processed by the in-process JobRunner.
+model Job {
+  id        String    @id @default(uuid())
+  type      JobType
+  status    JobStatus @default(QUEUED)
+  episodeId String?
+  /// Job-specific input, e.g. { "languages": ["es","pt"] }
+  params    Json      @default("{}")
+  /// Job-specific output, e.g. produced URLs
+  result    Json      @default("{}")
+  error     String?
+  attempts  Int       @default(0)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([episodeId])
+}
+
+/// Content partner. Studios upload series, which the admin reviews and publishes.
+model Studio {
+  id              String   @id @default(uuid())
+  name            String
+  email           String
+  apiKey          String   @unique
+  /// Share of coin revenue paid to the studio, in percent
+  revenueSharePct Int      @default(50)
+  createdAt       DateTime @default(now())
+
+  series Series[]
+}
+
+/// "Users who watched A also watched B", recomputed periodically.
+model SeriesSimilarity {
+  seriesId  String
+  relatedId String
+  score     Float
+
+  @@id([seriesId, relatedId])
+  @@index([seriesId, score])
 }
