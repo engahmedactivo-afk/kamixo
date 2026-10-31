@@ -38,6 +38,9 @@
     <button data-view="dashboard" class="active">Dashboard</button>
     <button data-view="series">Series</button>
     <button data-view="packs">Coin packs</button>
+    <button data-view="vip">VIP plans</button>
+    <button data-view="push">Push</button>
+    <button data-view="config">Config</button>
   </nav>
   <div style="margin-left:auto" class="row">
     <input id="key" type="password" placeholder="Admin API key" style="width:200px">
@@ -87,13 +90,16 @@ async function render() {
     if (view === 'dashboard') await renderDashboard(app);
     if (view === 'series') currentSeriesId ? await renderSeriesDetail(app, currentSeriesId) : await renderSeriesList(app);
     if (view === 'packs') await renderPacks(app);
+    if (view === 'vip') await renderVip(app);
+    if (view === 'push') await renderPush(app);
+    if (view === 'config') await renderConfig(app);
   } catch (e) { app.innerHTML = `<div class="card">Error: ${esc(e.message)}</div>`; }
 }
 
 async function renderDashboard(app) {
   const s = await api('GET', '/stats');
   app.innerHTML = `<div class="card stats">
-    ${[['Users', s.users], ['Published series', s.publishedSeries], ['Purchases (24h)', s.purchases24h], ['Coins sold (24h)', s.coinsSold24h], ['Unlocks (24h)', s.unlocks24h]]
+    ${[['Users', s.users], ['Published series', s.publishedSeries], ['Purchases (24h)', s.purchases24h], ['Coins sold (24h)', s.coinsSold24h], ['Unlocks (24h)', s.unlocks24h], ['Active VIP', s.activeVip], ['Ad unlocks (24h)', s.adUnlocks24h], ['Push devices', s.pushTokens + (s.pushEnabled ? '' : ' (push off)')]]
       .map(([k, v]) => `<div class="stat"><b>${esc(v)}</b><span>${esc(k)}</span></div>`).join('')}
   </div>`;
 }
@@ -223,6 +229,84 @@ async function renderPacks(app) {
   app.querySelectorAll('[data-toggle]').forEach((b) => (b.onclick = async () => {
     try { await api('PATCH', '/coin-packs/' + b.dataset.toggle, { active: b.dataset.active !== 'true' }); render(); } catch (err) { toast(err.message, true); }
   }));
+}
+
+async function renderVip(app) {
+  const plans = await api('GET', '/vip-plans');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">New VIP plan</h3>
+    <p style="color:var(--muted);margin-top:0">Auto-renewing subscription product ids from App Store Connect / Google Play (and RevenueCat). "Days" is only used by the sandbox verifier.</p>
+    <form id="newPlan"><div class="grid">
+      <div><label>Store product id</label><input name="productId" placeholder="vip_weekly" required></div>
+      <div><label>Name</label><input name="name" placeholder="VIP Weekly" required></div>
+      <div><label>Days</label><input name="days" type="number" min="1" value="7"></div>
+      <div><label>Price label</label><input name="priceLabel" placeholder="$4.99/week" required></div>
+      <div><label>Sort order</label><input name="sortOrder" type="number" value="0"></div>
+    </div><p><button class="btn">Create plan</button></p></form></div>
+  <div class="card"><table><thead><tr><th>Product id</th><th>Name</th><th>Days</th><th>Price</th><th>Active</th><th></th></tr></thead>
+    <tbody>${plans.map((p) => `<tr><td>${esc(p.productId)}</td><td>${esc(p.name)}</td><td>${p.days}</td><td>${esc(p.priceLabel)}</td>
+      <td>${p.active ? 'Yes' : 'No'}</td><td><button class="ghost" data-toggle="${esc(p.id)}" data-active="${p.active}">${p.active ? 'Disable' : 'Enable'}</button></td></tr>`).join('') || '<tr><td colspan="6">No plans yet.</td></tr>'}
+    </tbody></table></div>`;
+  $('#newPlan').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      await api('POST', '/vip-plans', { productId: f.get('productId'), name: f.get('name'), days: Number(f.get('days')), priceLabel: f.get('priceLabel'), sortOrder: Number(f.get('sortOrder')) });
+      toast('Plan created'); render();
+    } catch (err) { toast(err.message, true); }
+  };
+  app.querySelectorAll('[data-toggle]').forEach((b) => (b.onclick = async () => {
+    try { await api('PATCH', '/vip-plans/' + b.dataset.toggle, { active: b.dataset.active !== 'true' }); render(); } catch (err) { toast(err.message, true); }
+  }));
+}
+
+async function renderPush(app) {
+  const series = await api('GET', '/series');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">Send a notification</h3>
+    <form id="pushForm"><div class="grid">
+      <div><label>Title</label><input name="title" maxlength="80" required></div>
+      <div><label>Body</label><input name="body" maxlength="200" required></div>
+      <div><label>Audience</label><select name="audience"><option value="all">Everyone</option><option value="series">People who started a series</option></select></div>
+      <div><label>Opens series (optional)</label><select name="seriesId"><option value="">—</option>${series.map((s) => `<option value="${esc(s.id)}">${esc(s.title)}</option>`).join('')}</select></div>
+    </div><p><button class="btn">Send</button></p></form></div>
+  <div class="card"><h3 style="margin-top:0">Come-back reminders</h3>
+    <p style="color:var(--muted)">Nudges everyone who last watched 1–3 days ago. Run it once a day (or from a cron hitting <code>POST /admin/push/reminders</code>).</p>
+    <button class="ghost" id="reminders">Send reminders now</button></div>`;
+  $('#pushForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const r = await api('POST', '/push', { title: f.get('title'), body: f.get('body'), audience: f.get('audience'), seriesId: f.get('seriesId') || undefined });
+      toast(`Sent ${r.sent}, failed ${r.failed}`);
+    } catch (err) { toast(err.message, true); }
+  };
+  $('#reminders').onclick = async () => {
+    try { const r = await api('POST', '/push/reminders'); toast(`${r.candidates} candidates, ${r.sent} sent`); } catch (err) { toast(err.message, true); }
+  };
+}
+
+async function renderConfig(app) {
+  const cfg = await api('GET', '/settings/config');
+  app.innerHTML = `
+  <div class="card"><h3 style="margin-top:0">Remote config & experiments</h3>
+    <form id="cfgForm"><div class="grid">
+      <div><label>First-purchase bonus (%)</label><input name="firstPurchaseBonusPct" type="number" min="0" max="500" value="${esc(cfg.firstPurchaseBonusPct)}"></div>
+      <div><label>Paywall shows first</label><select name="paywallPrimary"><option value="coins" ${cfg.paywallPrimary === 'coins' ? 'selected' : ''}>Coin packs</option><option value="vip" ${cfg.paywallPrimary === 'vip' ? 'selected' : ''}>VIP</option></select></div>
+    </div>
+    <label>Experiments (JSON: name → list of variants; each user is assigned one variant and it's logged with their events)</label>
+    <textarea name="experiments" rows="5">${esc(JSON.stringify(cfg.experiments, null, 2))}</textarea>
+    <p><button class="btn">Save</button></p></form></div>`;
+  $('#cfgForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    let experiments;
+    try { experiments = JSON.parse(f.get('experiments')); } catch { return toast('Experiments must be valid JSON', true); }
+    try {
+      await api('PATCH', '/settings/config', { firstPurchaseBonusPct: Number(f.get('firstPurchaseBonusPct')), paywallPrimary: f.get('paywallPrimary'), experiments });
+      toast('Saved');
+    } catch (err) { toast(err.message, true); }
+  };
 }
 
 render();

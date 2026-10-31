@@ -6,7 +6,7 @@ import { config } from './config';
 
 async function main() {
   // Fail fast on bad configuration before accepting traffic.
-  void config.jwtSecret, config.adminApiKey, config.purchaseVerifier;
+  void config.jwtSecret, config.adminApiKey, config.purchaseVerifier, config.adRewardVerifier;
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   configureApp(app);
   app.enableShutdownHooks();

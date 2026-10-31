@@ -5,6 +5,11 @@ import { PrismaService } from '../common/prisma.service';
 import { PlaybackService } from '../playback/playback.service';
 import { PURCHASE_VERIFIER, PurchaseClaim, PurchaseVerifier } from './purchase-verifier';
 
+/** Start of the current UTC day. */
+export function startOfUtcDay(now = new Date()): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
 type Tx = Prisma.TransactionClient;
 
 @Injectable()
@@ -46,15 +51,18 @@ export class WalletService {
     });
   }
 
-  /** Credits coins for a verified store purchase. Idempotent per transactionId. */
-  async creditPurchase(claim: PurchaseClaim) {
+  /**
+   * Credits coins for a store purchase. Idempotent per transactionId.
+   * `trusted` skips the store check: only for sources that are already authenticated (RevenueCat webhook).
+   */
+  async creditPurchase(claim: PurchaseClaim, trusted = false) {
     const pack = await this.prisma.coinPack.findUnique({ where: { productId: claim.productId } });
     if (!pack) throw new AppError(HttpStatus.BAD_REQUEST, 'UNKNOWN_PRODUCT', 'Unknown product');
 
     const existing = await this.prisma.purchase.findUnique({ where: { transactionId: claim.transactionId } });
     if (existing) return this.alreadyCredited(existing.userId, claim.userId);
 
-    if (!(await this.verifier.verify(claim))) {
+    if (!trusted && !(await this.verifier.verify(claim))) {
       throw new AppError(HttpStatus.PAYMENT_REQUIRED, 'PURCHASE_NOT_VERIFIED', 'Purchase could not be verified');
     }
 
@@ -83,6 +91,11 @@ export class WalletService {
       throw e;
     }
     return { credited: coins, balance: await this.balance(claim.userId) };
+  }
+
+  /** Adds bonus coins (check-in, tasks). Callers ensure idempotency with their own unique keys. */
+  async grantBonus(tx: Tx, userId: string, coins: number, note: string) {
+    await tx.walletEntry.create({ data: { userId, delta: coins, type: 'BONUS', note } });
   }
 
   private async alreadyCredited(ownerId: string, userId: string) {

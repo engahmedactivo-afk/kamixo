@@ -4,6 +4,7 @@ import { Episode, Series } from '@prisma/client';
 import { PrismaService } from '../common/prisma.service';
 import { AppError } from '../common/errors';
 import { config } from '../config';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 export type EpisodeWithSeries = Episode & { series: Pick<Series, 'id' | 'freeEpisodes' | 'coinsPerEpisode' | 'status'> };
 
@@ -39,7 +40,10 @@ export function isFreeEpisode(ep: Pick<Episode, 'number'>, series: Pick<Series, 
 
 @Injectable()
 export class PlaybackService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subs: SubscriptionsService,
+  ) {}
 
   async findPublishedEpisode(episodeId: string): Promise<EpisodeWithSeries> {
     const ep = await this.prisma.episode.findUnique({
@@ -52,6 +56,7 @@ export class PlaybackService {
 
   async isEntitled(userId: string, ep: EpisodeWithSeries): Promise<boolean> {
     if (isFreeEpisode(ep, ep.series)) return true;
+    if (await this.subs.isVip(userId)) return true;
     const unlock = await this.prisma.unlock.findUnique({
       where: { userId_episodeId: { userId, episodeId: ep.id } },
     });

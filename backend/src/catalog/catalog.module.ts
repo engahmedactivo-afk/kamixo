@@ -9,13 +9,17 @@ import {
   ParseIntPipe,
   ParseUUIDPipe,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { Prisma, Series } from '@prisma/client';
+import { Response } from 'express';
+import { config } from '../config';
 import { AuthUser, CurrentUser, UserAuthGuard } from '../auth/auth.guards';
 import { PrismaService } from '../common/prisma.service';
 import { PlaybackModule } from '../playback/playback.module';
 import { isFreeEpisode, PlaybackService } from '../playback/playback.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 const MAX_PAGE = 50;
 
@@ -38,6 +42,7 @@ export class CatalogService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly playback: PlaybackService,
+    private readonly subs: SubscriptionsService,
   ) {}
 
   async genres(): Promise<{ genre: string; count: number }[]> {
@@ -101,21 +106,23 @@ export class CatalogService {
       },
     });
     if (!s) throw new NotFoundException('Series not found');
-    const [unlocks, progress] = await Promise.all([
+    const [unlocks, progress, vip] = await Promise.all([
       this.prisma.unlock.findMany({
         where: { userId, episode: { seriesId } },
         select: { episodeId: true },
       }),
       this.prisma.watchProgress.findUnique({ where: { userId_seriesId: { userId, seriesId } } }),
+      this.subs.isVip(userId),
     ]);
     const unlocked = new Set(unlocks.map((u) => u.episodeId));
     return {
       series: summary(s),
       episodes: s.episodes.map((e) => {
         const free = isFreeEpisode(e, s);
-        return { ...e, free, locked: !free && !unlocked.has(e.id) };
+        return { ...e, free, locked: !free && !vip && !unlocked.has(e.id) };
       }),
       progress: progress ? { episodeNumber: progress.episodeNumber, positionSec: progress.positionSec } : null,
+      vip,
     };
   }
 }
@@ -161,9 +168,39 @@ export class CatalogController {
   }
 }
 
+const escapeHtml = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
+/**
+ * Public share / ad landing page: <PUBLIC_BASE_URL>/s/<seriesId>?ep=N
+ * Opens the app through its URL scheme (and Android App Links / iOS Universal Links when configured).
+ */
+@Controller('s')
+export class ShareController {
+  constructor(private readonly prisma: PrismaService) {}
+
+  @Get(':id')
+  async landing(@Param('id', ParseUUIDPipe) id: string, @Query('ep') ep: string | undefined, @Res() res: Response) {
+    const s = await this.prisma.series.findFirst({ where: { id, status: 'PUBLISHED' } });
+    if (!s) throw new NotFoundException();
+    const episode = Math.max(1, Number(ep) || 1);
+    const appUrl = `${config.appUrlScheme}://series/${s.id}?ep=${episode}`;
+    res.type('html').send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(s.title)} – Kamixo</title>
+<meta property="og:title" content="${escapeHtml(s.title)}"><meta property="og:description" content="${escapeHtml(s.description)}">
+<meta property="og:image" content="${escapeHtml(s.coverUrl)}"><meta property="og:type" content="video.tv_show">
+<style>body{margin:0;background:#0f0f14;color:#eee;font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh}
+main{max-width:360px;padding:24px;text-align:center}img{width:200px;border-radius:12px}a.btn{display:block;margin-top:16px;padding:14px;border-radius:10px;background:#ff3d71;color:#fff;text-decoration:none;font-weight:600}</style>
+</head><body><main><img src="${escapeHtml(s.coverUrl)}" alt=""><h2>${escapeHtml(s.title)}</h2><p>${escapeHtml(s.description)}</p>
+<a class="btn" href="${escapeHtml(appUrl)}">Watch episode ${episode} in the app</a>
+<p style="color:#999;font-size:13px">Don't have the app yet? Get it from the App Store or Google Play.</p>
+<script>setTimeout(function(){location.href=${JSON.stringify(appUrl)}},300)</script></main></body></html>`);
+  }
+}
+
 @Module({
   imports: [PlaybackModule],
-  controllers: [CatalogController],
+  controllers: [CatalogController, ShareController],
   providers: [CatalogService],
 })
 export class CatalogModule {}

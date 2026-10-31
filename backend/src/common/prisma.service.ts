@@ -1,5 +1,6 @@
 import { Global, Injectable, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { FETCH, fetchProvider } from './fetch.token';
 
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
@@ -12,5 +13,5 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 }
 
 @Global()
-@Module({ providers: [PrismaService], exports: [PrismaService] })
+@Module({ providers: [PrismaService, fetchProvider], exports: [PrismaService, FETCH] })
 export class PrismaModule {}

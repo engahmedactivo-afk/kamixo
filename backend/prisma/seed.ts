@@ -27,6 +27,14 @@ async function main() {
     await prisma.coinPack.upsert({ where: { productId: p.productId }, create: p, update: p });
   }
 
+  const plans = [
+    { productId: 'vip_weekly', name: 'VIP Weekly', days: 7, priceLabel: '$4.99/week', sortOrder: 1 },
+    { productId: 'vip_monthly', name: 'VIP Monthly', days: 30, priceLabel: '$14.99/month', sortOrder: 2 },
+  ];
+  for (const p of plans) {
+    await prisma.vipPlan.upsert({ where: { productId: p.productId }, create: p, update: p });
+  }
+
   if ((await prisma.series.count()) > 0) {
     console.log('Series already present, skipping sample series.');
     return;

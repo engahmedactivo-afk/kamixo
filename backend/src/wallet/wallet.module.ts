@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Module, Param, ParseUUIDPipe, Post, UseGuards } from '@nestjs/common';
 import { IsIn, IsString, Length } from 'class-validator';
 import { AuthUser, CurrentUser, UserAuthGuard } from '../auth/auth.guards';
+import { RevenueCatClient } from '../common/revenuecat.client';
 import { config } from '../config';
 import { PlaybackModule } from '../playback/playback.module';
 import { PURCHASE_VERIFIER, RevenueCatPurchaseVerifier, SandboxPurchaseVerifier } from './purchase-verifier';
@@ -52,9 +53,11 @@ export class WalletController {
     WalletService,
     {
       provide: PURCHASE_VERIFIER,
-      useFactory: () =>
-        config.purchaseVerifier === 'revenuecat' ? new RevenueCatPurchaseVerifier() : new SandboxPurchaseVerifier(),
+      inject: [RevenueCatClient],
+      useFactory: (rc: RevenueCatClient) =>
+        config.purchaseVerifier === 'revenuecat' ? new RevenueCatPurchaseVerifier(rc) : new SandboxPurchaseVerifier(),
     },
   ],
+  exports: [WalletService],
 })
 export class WalletModule {}
