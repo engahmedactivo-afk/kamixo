@@ -76,7 +76,7 @@ short-drama app worldwide, competing with ReelShort, DramaBox, NetShort and Free
 - Register Apple/Google developer accounts and set up legal entity, privacy policy and terms.
 - Start **content acquisition in parallel**. This is the real bottleneck (see §4).
 
-### Phase 1: MVP (week 3–10)
+### Phase 1: MVP (week 3–10) ✅ implemented, see README
 1. Guest login → full-screen vertical feed → series player with episode list.
 2. HLS playback, next-episode preload, continue-watching.
 3. Free-episode gate + coin wallet + coin packs (IAP) + unlock flow.
